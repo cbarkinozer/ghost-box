@@ -1,12 +1,14 @@
 # ghost-box
 
-Caspy now has a small model-selection sidebar. Select the Qwen3.5 MLX preset or choose a local MLX folder; the selection persists using OS-native Qt settings. Selecting a model does not download or load it. Compatibility checks, downloads, and inference are subsequent increments. This panel adds no dependencies.
+![Caspy](caspy.png)
+
+Caspy has a small model-selection sidebar. Select the Qwen3.5 MLX preset and click **Download preset**, or choose a local MLX folder. Selection persists in Qt settings. Downloading does not load a model. Optional MLX and llama.cpp inference answer questions and summarize explicitly selected emails in a separate process, with bounded batching for large selections.
 
 A lightweight desktop email assistant powered by **Caspy**, your local small language model companion, with on-device inference via MLX and llama.cpp.
 
 Ghost-box helps you summarize email conversations, search downloaded messages, and ask questions with references to the original mail. It is designed for macOS and Windows, with a small Python codebase that is straightforward to read, review, and maintain.
 
-> **Status: Gmail fetch increment.** Read-only Google sign-in works. Manual date/time-range fetching, RAM-only session replacement, and a plain-text mail reader are implemented and checked with synthetic data. Live mailbox fetching still needs user verification. Models, search, cleanup controls, and packaging remain planned.
+> **Status: local Q&A and summarization.** Gmail fetch/reading, RAM-only emails, model downloads/selection, MLX and local GGUF inference, batch-task progress, memory reporting, and JSON generation profiles are implemented. Synthetic offline and UI checks passed on Apple Silicon. Search, cleanup controls, broader quality evaluations, Windows validation, and packaging remain planned.
 
 ## Purpose
 
@@ -71,7 +73,7 @@ Python is the initial implementation choice. Introduce another application langu
 
 The user selects the backend explicitly. A file format alone does not establish model compatibility. Complete one backend first, then add the second behind the same narrow inference interface.
 
-The initial model preset is [mlx-community/Qwen3.5-4B-MLX-4bit](https://huggingface.co/mlx-community/Qwen3.5-4B-MLX-4bit). Confirm text-only runtime compatibility before integrating it. [Occam](https://huggingface.co/cbarkinozer/Qwen3.5-4B-Turkish-Concise-Lora), a Turkish concise-response LoRA, is an additional candidate after conversion and task-specific evaluation. Caspy is the companion's name; the underlying model can change.
+The initial model preset is [mlx-community/Qwen3.5-4B-MLX-4bit](https://huggingface.co/mlx-community/Qwen3.5-4B-MLX-4bit). Text-only generation was verified with the pinned `mlx-lm==0.32.2` runtime and this preset revision. [Occam](https://huggingface.co/cbarkinozer/Qwen3.5-4B-Turkish-Concise-Lora), a Turkish concise-response LoRA, is an additional candidate after conversion and task-specific evaluation. Caspy is the companion's name; the underlying model can change.
 
 Choose the default using email summarization and question-answering results, including factual faithfulness, retrieval quality, latency, and memory usage. Concise output alone is insufficient.
 
@@ -200,7 +202,7 @@ Select a row to read the message as plain text. HTML-only mail is converted to t
 
 Messages and metadata are held only in process memory. Every launch starts with an empty mail list; only Fetch retrieves mail. Closing the application, disconnecting, or changing accounts clears session mail. Ghost-box does not write email content or derived results to files, databases, or logs. Earlier versions' `mail.sqlite3` and SQLite sidecar files are removed at startup without loading their contents. Removing those files is ordinary deletion, not a guarantee of erasure from backups or storage snapshots. OS swap and crash dumps are outside this application-level RAM-only guarantee.
 
-OAuth credentials remain in the OS credential store, and model selection remains in Qt settings. Model files may be saved to disk in a later download increment; email content must stay in RAM.
+OAuth credentials remain in the OS credential store, and model selection remains in Qt settings. Model files and numeric inference profiles are saved to disk; email content, questions, summary instructions, and intermediate notes stay in RAM.
 
 New files for this step are [mail_store.py](mail_store.py) (session-only in-memory storage) and [mail_text.py](mail_text.py) (MIME-to-text conversion); fetching is in [gmail.py](gmail.py), and the UI remains in [main.py](main.py). No new dependencies were added.
 
@@ -210,4 +212,64 @@ Run the checks without Google access or real credentials:
 uv run --locked python -m unittest discover -s tests -v
 ```
 
-Model downloads and inference are not implemented yet.
+### Model downloads
+
+**Download preset** retrieves only the selected public preset from Hugging Face. No mail is included in model-download requests. The approximately 3.1 GB download is pinned to revision `32f3e8ecf65426fc3306969496342d504bfa13f3`; file sizes and SHA-256/Git blob hashes are recorded in `model_manifest.json`. Files are verified before promotion from `.part` files; completion is recorded only after every file succeeds. Startup checks the completion record and sizes, not full weight hashes; retrying rechecks hashes.
+
+Models live under Qt's application-data directory at `models/<revision>/` (`~/Library/Application Support/Ghost-box/models/` on macOS). This is separate from session-only emails. There is no duplicate Hub cache. Cancel removes the current partial file; verified completed files are reused on retry. Transfers interrupted within one file restart that file. Closing during a download requests cancellation; close again after it stops. Network reads have 20-second timeouts.
+
+The preset's [model card](https://huggingface.co/mlx-community/Qwen3.5-4B-MLX-4bit) uses `mlx-vlm`. A downloaded model is not proof of runtime compatibility. Local folders are never modified; compatible MLX models can be used for inference, while unsupported models report an error. Explicit model removal remains a future increment.
+
+
+### Ask selected emails
+
+On Apple Silicon macOS, install the optional runtime and launch with:
+
+```sh
+uv run --locked --extra inference main.py
+```
+
+The base launch remains available without inference dependencies. The `inference` extra pins `mlx-lm==0.32.2`, using text-only MLX support rather than a vision runtime; transitive versions are locked in `uv.lock`. Importing MLX happens only inside the on-demand worker, never at UI startup.
+
+Fetch mail, then use Cmd/Ctrl-click or Shift-click to select messages, or **Select all** to include every fetched message. Type a question and press **Ask selected emails**. Only selected emails' IDs, timestamps, headers, and bodies enter the request. The reader shows the current email's ID so citations can be checked. Unselected emails and previous answers are not included. This is one question per request, without conversation history.
+
+The input counter includes the selected message representation, question, and system instructions. Approximate tokens are characters divided by four, rounded up; actual tokenization varies by language. Chat-template overhead is not included in that estimate. The worker measures fully templated input with the selected tokenizer. The default input budget is 7,680 tokens per task and final output budget is 512 tokens. Oversized selections are processed in bounded batches rather than silently truncated; details follow below.
+
+Answers stream into a plain-text area. **Stop** terminates the worker. Changing the selection, question, or model stops generation and clears the answer. Fetching and disconnecting also invalidate answers. The process exits after every answer, unloading model memory; the next question reloads it. Worker inputs travel through stdin, outputs through stdout, never command-line arguments or temporary files. Offline mode and local-only tokenization are enforced, remote model code is disabled, and raw runtime diagnostics are neither shown nor logged. Source-reference quality and resistance to instructions in mail still need the planned evaluation set.
+
+
+### Summaries and large selections
+
+**Summarize** works with one or multiple selected emails, even when the question field is empty. Text entered above the buttons becomes additional summary instructions (for example, “Use Turkish; focus on deadlines”). Those instructions remain in RAM. **Ask selected emails** continues to use that field as a question.
+
+If the request fits its input budget, it uses one model call. Otherwise, the worker groups emails, splits oversized bodies into numbered excerpts with their original email IDs, extracts relevant evidence, and synthesizes a final answer. No source text is silently cut off. Intermediate notes are compressed and can omit detail; this does not guarantee the fidelity of reading the entire selection in one context. Source-reference and summary-quality evaluations remain necessary.
+
+The progress bar shows completed/created tasks, including a reserved final synthesis task. Additional synthesis tasks may be created if the notes themselves need batching; the total increases visibly. Calls run sequentially with one loaded model. The default limit is 64 calls, after which the workflow reports a clear error rather than running indefinitely. Notes use up to 384 output tokens, bounded further by the input budget and configured output limit. Questions or metadata that cannot fit even a single task produce an explicit error. Stop and scope changes terminate the whole workflow and discard in-flight notes.
+
+### Inference parameters and local JSON
+
+Expand **Inference parameters** in Caspy to edit sampling, output-token limit, input budget per task, and maximum task count. Edits apply to the next request; **Save model profile** persists them. **Reload JSON** reads manual edits. Profiles are keyed by the preset repository ID or the exact local model path.
+
+The local file is `~/Library/Application Support/Ghost-box/inference-settings.json` on macOS (Qt's application-data directory on Windows). Hover over the profile message to see its path. It is initialized from the small reviewed [inference_defaults.json](inference_defaults.json); only numeric parameters and profile/source identifiers belong there. Do not put private instructions or email content in this file. Invalid JSON, unknown parameters, and out-of-range values are rejected rather than silently accepted or overwritten.
+
+For the Qwen preset, the [base model card's non-thinking general-task recommendations](https://huggingface.co/Qwen/Qwen3.5-4B#best-practices) supply temperature 0.7, top-p 0.8, top-k 20, min-p 0, presence penalty 1.5, and repetition penalty 1.0. Input/output budgets and task caps are Ghost-box defaults, not Hugging Face recommendations. Other models start with the generic `default` profile; add a `profiles` entry or save one through the UI. MLX penalties use the runtime's full token-history window; numerical settings do not imply identical behavior across runtimes. Non-thinking mode is requested; custom chat templates must support it.
+
+### Memory and GGUF
+
+Caspy reports **worker peak RAM** while the model is loaded. This includes the model, runtime, tokenizer, and caches; it is not an exact measurement of weights alone. MLX additionally reports active and peak allocator memory. These measurements overlap and must not be summed. Dedicated GPU VRAM is not measured. After completion or Stop, the sidebar marks the model unloaded and retains the last request's measurements only in RAM.
+
+Choose **Choose GGUF file…** for a local instruction/chat model with an embedded chat template. The optional `llama-cpp-python==0.3.36` backend uses llama.cpp in the same worker, with local tokenization, RAM-only task state, and streamed output. It never downloads a model automatically. GGUF files without a supported embedded chat template fail clearly rather than using a guessed format. Hardware acceleration depends on the installed llama.cpp build; unsupported architectures or templates remain possible.
+
+To enable both runtimes on this Mac:
+
+```sh
+uv run --locked --extra inference --extra gguf main.py
+```
+
+For GGUF alone (including Windows):
+
+```sh
+uv run --locked --extra gguf main.py
+```
+
+The optional llama.cpp binding can require a native compiler when no compatible wheel exists; see its [installation documentation](https://github.com/abetlen/llama-cpp-python#installation). Both MLX and a temporary small GGUF model were smoke-tested on Apple Silicon using synthetic messages. Native Windows execution and model-quality evaluations remain pending.

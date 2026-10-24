@@ -1,0 +1,72 @@
+{
+  "repo": "mlx-community/Qwen3.5-4B-MLX-4bit",
+  "revision": "32f3e8ecf65426fc3306969496342d504bfa13f3",
+  "files": [
+    {
+      "name": "README.md",
+      "size": 2273,
+      "algorithm": "git-sha1",
+      "digest": "5d96bdf2d72695dfdf5636754df7cb7136e3b0d4"
+    },
+    {
+      "name": "chat_template.jinja",
+      "size": 7756,
+      "algorithm": "git-sha1",
+      "digest": "a585dec894e63da457d9440ec6aa7caa16d20860"
+    },
+    {
+      "name": "config.json",
+      "size": 3366,
+      "algorithm": "git-sha1",
+      "digest": "cb3e1a878a5c4a0505e0c9967da45820b2ca6bd3"
+    },
+    {
+      "name": "model.safetensors",
+      "size": 3034300695,
+      "algorithm": "sha256",
+      "digest": "5fb9acd0246866381cf8c5c354c6db1019f6498eec4ccb4f5edcc71ffeacb2db"
+    },
+    {
+      "name": "model.safetensors.index.json",
+      "size": 101944,
+      "algorithm": "git-sha1",
+      "digest": "40196ba58595ef9b3fad25a8a6daf3288b953c19"
+    },
+    {
+      "name": "preprocessor_config.json",
+      "size": 390,
+      "algorithm": "git-sha1",
+      "digest": "2ea84a437d448ff71b08df68fdd949d5cc4ebb64"
+    },
+    {
+      "name": "processor_config.json",
+      "size": 1300,
+      "algorithm": "git-sha1",
+      "digest": "7ad6acdf4203f22b7b990e36ccc3a1fe38563d5e"
+    },
+    {
+      "name": "tokenizer.json",
+      "size": 19989343,
+      "algorithm": "sha256",
+      "digest": "87a7830d63fcf43bf241c3c5242e96e62dd3fdc29224ca26fed8ea333db72de4"
+    },
+    {
+      "name": "tokenizer_config.json",
+      "size": 1139,
+      "algorithm": "git-sha1",
+      "digest": "a068e2468cff426a9b105006e74e044030a6faf4"
+    },
+    {
+      "name": "video_preprocessor_config.json",
+      "size": 385,
+      "algorithm": "git-sha1",
+      "digest": "3ba673a5ad7d4d13f54155ecd38b2a94a6dac8fe"
+    },
+    {
+      "name": "vocab.json",
+      "size": 6722759,
+      "algorithm": "git-sha1",
+      "digest": "0aa0ce0658d60ac4a5d609f4eadb0e8e43514176"
+    }
+  ]
+}

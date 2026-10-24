@@ -8,3 +8,11 @@ dependencies = [
     "keyring>=25.7.0",
     "pyside6-essentials==6.10.2",
 ]
+
+[project.optional-dependencies]
+inference = [
+    "mlx-lm==0.32.2 ; platform_machine == 'arm64' and sys_platform == 'darwin'",
+]
+gguf = [
+    "llama-cpp-python==0.3.36",
+]

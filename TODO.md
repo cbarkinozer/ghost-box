@@ -73,17 +73,17 @@ Date/time controls default to **today 00:00–23:59**, including the entire end 
 
 ## 5. Model selection and download
 
-The Caspy sidebar saves a preset or local-folder selection using Qt settings. It does not download, validate, or load models yet.
+The Caspy sidebar saves a preset or local-folder selection using Qt settings. The preset downloader verifies pinned files on demand. The pinned preset passed text-only offline generation with optional mlx-lm 0.32.2; selected-email Q&A now runs in an on-demand worker.
 
 - [x] Add a small sidebar with preset/local-folder selection and restore the selection after restart.
 
 Initial preset: [mlx-community/Qwen3.5-4B-MLX-4bit](https://huggingface.co/mlx-community/Qwen3.5-4B-MLX-4bit).
 
-- [ ] First run a small text-only compatibility check with a pinned MLX runtime. The model card demonstrates mlx-vlm; do not assume the smallest text-only runtime works without checking.
-- [ ] Add one model settings panel: preset selector, **Download**, **Choose local model**, and selected-model status.
-- [ ] Download the preset to one documented application model directory; pin the revision and validate required artifacts.
-- [ ] Show progress, cancellation, retry, and readable disk/network errors. Never treat a partial download as ready.
-- [ ] Reuse complete downloaded files and avoid duplicate application/Hub caches where practical.
+- [x] First run a small text-only compatibility check with a pinned MLX runtime. The model card demonstrates mlx-vlm; do not assume the smallest text-only runtime works without checking.
+- [x] Add one model settings panel: preset selector, **Download**, **Choose local model**, and selected-model status.
+- [x] Download the preset to one documented application model directory; pin the revision and validate required artifacts.
+- [x] Show progress, cancellation, retry, and readable disk/network errors. Never treat a partial download as ready.
+- [x] Reuse complete downloaded files and avoid duplicate application/Hub caches where practical.
 - [ ] Support a custom MLX directory first; validate compatibility and report unsupported models clearly.
 - [ ] Keep downloaded weights separate from mail and derived cache. Offer explicit **Remove downloaded model** without deleting user-owned custom directories.
 - [ ] Require explicit selection before using a model; do not download on launch or fall back to a remote service.
@@ -92,19 +92,29 @@ Initial preset: [mlx-community/Qwen3.5-4B-MLX-4bit](https://huggingface.co/mlx-c
 
 ## 6. Local inference and lifecycle
 
-- [ ] Run inference in a separate on-demand process with a small explicit communication protocol.
-- [ ] Show unloaded/loading/ready/generating/error states, streamed output, and **Stop**.
+- [x] Run inference in a separate on-demand process with a small explicit communication protocol.
+- [x] Show unloaded/loading/generating/error states, streamed output, and **Stop**; unload after each workflow.
 - [ ] Add **Unload model** and a configurable idle timeout. Do not unload during active generation.
 - [ ] Unload the previous model before switching and stop the worker on application exit.
-- [ ] Add a collapsed **Advanced** section with maximum output tokens, temperature, and idle timeout; provide safe defaults and reset.
-- [ ] Validate advanced values. Add context/retrieval limits only if needed; avoid exposing runtime internals by default.
-- [ ] Confirm local inference works offline after setup and that model memory is released when the worker exits.
+- [x] Add collapsed inference controls with per-model numeric profiles in local JSON and reviewed preset defaults.
+- [ ] Add reset-to-default controls; idle timeout remains unnecessary while workers exit after each request.
+- [x] Validate sampling parameters, input/output budgets, and task caps in both UI and worker.
+- [x] Check offline MLX and GGUF generation on macOS with synthetic messages; each worker exits afterward.
+- [x] Show worker peak RAM and MLX allocator memory; distinguish unloaded state and historical measurements.
 
 **Done when:** the selected model responds without blocking the UI, generation can stop, and idle unloading works.
 
 ## 7. Email assistance: bounded workflows
 
-- [ ] Summarize a selected email with references to the original text.
+- [x] Select multiple emails, select all fetched emails, or clear selection.
+- [x] Show input characters and approximate tokens (characters / 4, rounded up).
+- [x] Ask one question using only selected emails; stream the answer and support Stop.
+- [x] Keep questions and answers in RAM; invalidate answers when scope changes.
+- [x] Exit the inference process after each answer to unload the model. Persistent loading and idle timeout remain deferred.
+
+- [x] Add Summarize for selected emails with optional RAM-only additional instructions and source-ID prompting.
+- [x] Split oversized selections into token-budgeted evidence tasks and hierarchical synthesis; show created/completed counts and enforce a call limit.
+- [ ] Evaluate summary omissions, source references, and conflicts across batch boundaries.
 - [ ] Summarize a conversation chronologically, limiting repeated quoted content and respecting the input budget.
 - [ ] Translate natural-language search into a small validated structure: sender/name, recipient, subject, date range, and terms.
 - [ ] Display interpreted filters so the user can inspect or correct them. Ask for clarification when names or dates are ambiguous.
@@ -138,11 +148,16 @@ Start with approximately 20–30 synthetic messages across a few threads and 10 
 
 ## 9. Later compatibility and release work
 
-- [ ] Add custom GGUF selection and a bundled llama.cpp worker for macOS/Windows after the MLX path works.
+- [x] Add local GGUF selection and optional pinned llama.cpp Python backend; smoke-test on macOS.
+- [ ] Validate native Windows execution and distribute the llama.cpp runtime in packaged builds.
 - [ ] Select and validate a Windows preset separately; the MLX preset is Apple-Silicon-only.
 - [ ] Add Outlook only after the Gmail workflow is complete.
 - [ ] Package native applications and verify startup, idle memory, downloads, credentials, and worker shutdown on supported devices.
 - [ ] Review local data protection, retention, backups, dependencies, and network boundaries before broader confidential use.
+
+## Future optimizations
+
+- [ ] Evaluate a small local spam/attention classifier; optionally gray out low-attention mail while keeping it selectable and available. No automatic removal or provider-side action.
 
 ## Keep deferred
 
