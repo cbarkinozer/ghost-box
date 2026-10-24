@@ -1,4 +1,10 @@
 # Byte-compiled / optimized / DLL files
+# Local OAuth configuration and future private application fixtures
+.local/
+client_secret*.json
+credentials.json
+oauth-client.json
+
 __pycache__/
 *.py[codz]
 *$py.class

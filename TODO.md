@@ -23,32 +23,38 @@ Build a small desktop application in reviewable steps. This is a plan, not a lis
 
 ## 2. Connect Gmail
 
-- [ ] Document Google Cloud desktop OAuth client setup and the required local configuration file.
-- [ ] Add **Connect Gmail**, account identity, and **Disconnect**.
-- [ ] Use the system browser and read-only Gmail OAuth; never ask for a Gmail password.
-- [ ] Store tokens in the OS credential store. Explain the chosen OAuth and credential-storage dependencies.
+- [x] Document Google Cloud desktop OAuth client setup and the required local configuration file.
+- [x] Add **Connect Gmail**, account identity, and **Disconnect**.
+- [x] Load the application's OAuth configuration automatically; end users only click Connect and sign in with Google.
+- [ ] Maintainer: register Ghost-box's Google OAuth client and include `oauth-client.json` in configured builds. Verify live sign-in.
+- [x] Use the system browser and read-only Gmail OAuth; never ask for a Gmail password.
+- [x] Store tokens in the OS credential store. Explain the chosen OAuth and credential-storage dependencies.
 - [ ] Handle cancelled login, expired/revoked credentials, and connection errors visibly.
-- [ ] Disconnect by removing local credentials; do not silently delete downloaded mail.
+- [x] Disconnect by removing local credentials; do not silently delete downloaded mail.
+
+Live Google sign-in was confirmed by the user. Startup reads saved identity locally. Fetch now refreshes expired tokens and reports revoked access; fetching still needs the first live mailbox check.
 
 **Done when:** connecting and disconnecting work without downloading messages or starting a model.
 
 ## 3. Fetch a date range
 
-- [ ] Add **From**, **To**, and **Fetch**. Reject reversed or invalid ranges.
-- [ ] Define dates as inclusive calendar days in the displayed timezone; convert to an exclusive next-day upper bound for querying.
-- [ ] Document whether filtering uses Gmail's internal received timestamp; verify boundary behavior.
-- [ ] Fetch only on button press. Support pagination, progress, cancellation, and useful errors.
-- [ ] Start with non-Spam/non-Trash mail, including Sent; show this scope explicitly.
-- [ ] Store Gmail message/thread IDs, sender, recipients, subject, timestamp, and readable body in SQLite.
-- [ ] Handle plain-text and HTML-only messages without rendering active HTML or fetching remote assets. Defer attachments.
-- [ ] Upsert by provider message ID so overlapping or repeated fetches do not create duplicates.
+Date/time controls default to **today 00:00–23:59**, including the entire end minute. Each successful fetch atomically replaces the connected account's previous local emails; failure or cancellation keeps them. Fetch/cancellation status is shown in the UI; durable fetch coverage/history is still pending.
+
+- [x] Add **From**, **To**, and **Fetch**. Reject reversed or invalid ranges.
+- [x] Include editable hours/minutes in local time; the To minute is inclusive, converted to an exclusive next-minute bound.
+- [x] Document whether filtering uses Gmail's internal received timestamp; verify boundary behavior.
+- [x] Fetch only on button press. Support pagination, progress, cancellation, and useful errors.
+- [x] Include Sent; exclude Spam, Trash, and Drafts. Show this scope in the initial reader hint.
+- [x] Store Gmail message/thread IDs, sender, recipients, subject, timestamp, and readable body in SQLite.
+- [x] Handle plain-text and HTML-only messages without rendering active HTML or fetching remote assets. Defer attachments.
+- [x] Replace previous local messages in one transaction after a successful fetch; avoid duplicates and preserve old messages on failure/cancellation.
 - [ ] Record successful fetch coverage and partial/cancelled fetch status honestly; no scheduled synchronization.
 
 **Done when:** a selected range produces browsable local messages, a second fetch creates no duplicates, and boundary dates behave as displayed.
 
 ## 4. Browse, search, and clear local data
 
-- [ ] Show a simple sender/subject/date list and readable selected message; group conversations only as needed for summaries.
+- [x] Show a simple sender/subject/date list and readable selected message; group conversations only as needed for summaries.
 - [ ] Add local keyword/exact-text search and sender, subject, and date filters using SQLite/FTS5.
 - [ ] Add **Delete local copy** for selected messages. Remove associated index entries and derived results; never delete from Gmail.
 - [ ] Explain that a later Fetch can download deleted local messages again; no suppression-list feature initially.
@@ -59,6 +65,8 @@ Build a small desktop application in reviewable steps. This is a plan, not a lis
 **Done when:** search works without a loaded model, deleted mail disappears from retrieval, and cleanup actions have distinct, clear effects.
 
 ## 5. Model selection and download
+
+**Next increment after code review:** a small Caspy model-selection side panel. Do not implement until the user resumes.
 
 Initial preset: [mlx-community/Qwen3.5-4B-MLX-4bit](https://huggingface.co/mlx-community/Qwen3.5-4B-MLX-4bit).
 

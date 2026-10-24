@@ -4,7 +4,7 @@ A lightweight desktop email assistant powered by **Caspy**, your local small lan
 
 Ghost-box helps you summarize email conversations, search downloaded messages, and ask questions with references to the original mail. It is designed for macOS and Windows, with a small Python codebase that is straightforward to read, review, and maintain.
 
-> **Status: initial desktop shell.** The application currently opens a mostly empty window. Email, inference, packaging, and security controls below remain planned.
+> **Status: Gmail fetch increment.** Read-only Google sign-in works. Manual date/time-range fetching, local SQLite replacement, and a plain-text mail reader are implemented and checked with synthetic data. Live mailbox fetching still needs user verification. Models, search, cleanup controls, and packaging remain planned.
 
 ## Purpose
 
@@ -163,8 +163,47 @@ uv run --locked main.py
 
 uv creates the local `.venv` and installs the locked dependencies on first launch. Python 3.11 or newer is required; uv can provision a compatible interpreter.
 
-The entire application is currently in [main.py](main.py). [pyproject.toml](pyproject.toml) declares one direct dependency, **PySide6-Essentials**, which provides Qt Widgets without the additional PySide6 Addons package. Its required binding library, shiboken6, is installed transitively. [uv.lock](uv.lock) records exact dependency versions.
+The desktop interface is in [main.py](main.py). The UI dependency in [pyproject.toml](pyproject.toml) is **PySide6-Essentials**, which provides Qt Widgets without the additional PySide6 Addons package. Its required binding library, shiboken6, is installed transitively. [uv.lock](uv.lock) records exact dependency versions.
 
-PySide6-Essentials is pinned to 6.10.2: the initial 6.12.0 installation failed to discover the installed Cocoa platform plugin on the development Mac. The pinned version was checked with the actual launch command and a native-window startup/shutdown check.
+PySide6-Essentials remains pinned to the checked version, 6.10.2. A recurring Cocoa discovery error on the development Mac was traced to macOS hidden flags on installed plugin files; changing Qt versions alone did not fix that underlying cause. Before creating the application, `prepare_qt_plugins()` clears only the hidden flag within the installed Qt plugin directory on macOS, preserving other file flags. This handles the condition on each launch without a manual repair command or additional dependency. The source of the recurring hidden flags has not been identified.
 
-Close the window to exit. This increment does not connect to Gmail, store mail, download models, or start a model worker. Installation requires network access; the window itself does not.
+The account toolbar is implemented in [main.py](main.py); [gmail.py](gmail.py) handles OAuth and native credential storage. Two additional direct dependencies are `google-auth-oauthlib` for Google's browser-based OAuth with PKCE, and `keyring` for macOS Keychain / Windows Credential Manager. Their transitive dependencies are recorded in the lockfile. The full Gmail API SDK is not installed.
+
+### Connect Gmail
+
+For users, the flow is **Connect Gmail → Google sign-in → consent → connected**. There is no file picker or Google Cloud setup for end users.
+
+The following setup is performed once by the application maintainer:
+
+1. Create or select a project in [Google Cloud Console](https://console.cloud.google.com/) and enable **Gmail API**.
+2. Configure the Google Auth Platform consent screen. Choose Internal only if the project and users belong to the appropriate Workspace organization; otherwise use External and add your account as a test user while testing.
+3. Add the read-only scope `https://www.googleapis.com/auth/gmail.readonly` to the application's data access configuration.
+4. Create an OAuth client with application type **Desktop app**, then download its JSON file. A Web application client is not interchangeable.
+5. Save the downloaded configuration as `oauth-client.json` beside `gmail.py`. This filename is ignored by Git. Include the configuration in distributed builds; do not include user tokens. The configuration remains local and untracked.
+6. Launch Ghost-box, click **Connect Gmail**, and finish sign-in and consent in the system browser. The application checks the Gmail profile and saves credentials in the OS credential store. No email messages are downloaded.
+
+The official flow uses a temporary loopback callback listener on `127.0.0.1`, not an application web server. Browser authorization waits up to 60 seconds; network requests have 20-second timeouts. If you abandon sign-in, wait for it to time out before retrying. Closing the application is deferred while an account operation is running.
+
+On startup, the application reads only the locally saved account identity; it does not contact Google or assert that saved credentials remain valid. **Disconnect** removes the local credential entry, without changing mail or revoking Google's server-side grant. To revoke that grant as well, remove Ghost-box from your Google Account's connected applications.
+
+Google testing restrictions, restricted-scope verification, and Workspace administrator policies can affect sign-in. See [Google's desktop OAuth documentation](https://developers.google.com/identity/protocols/oauth2/native-app). There is no plaintext-token fallback if the native credential store is unavailable.
+
+### Fetch and read mail
+
+**From** defaults to today at **00:00** and **To** to today at **23:59**. Both include editable hours and minutes. Times follow this computer's local timezone, and the entire displayed To minute is included (for example, 10:45 includes messages through 10:45:59.999). Filtering uses Gmail's `internalDate`, with epoch-second queries and an exact millisecond boundary check; it does not rely on the email's Date header. See [Google's timezone guidance](https://developers.google.com/workspace/gmail/api/guides/filtering).
+
+Sent mail is included; Spam, Trash, and Drafts are excluded. **Cancel** stops between network requests and discards the incomplete replacement. Each successful Fetch replaces the connected account's previous local messages with the new results, including clearing them when the result is empty. Replacement uses one SQLite transaction: failure or cancellation preserves the previous local emails, while a successful fetch commits the new set. Other accounts' local data is unaffected. No requests are made to mark mail as read or modify Gmail.
+
+Select a row to read the message as plain text. HTML-only mail is converted to text without rendering HTML, loading images, or following links. This initial implementation downloads raw MIME, so attachment bytes may be transferred as part of a message, but attachments are not separately extracted, stored, or displayed.
+
+Messages are saved in `mail.sqlite3` under Qt's local application-data directory (`~/Library/Application Support/Ghost-box/` on macOS). The list shows the connected account's most recent successfully fetched set, newest first. Existing data from older versions is replaced on the next successful fetch. Disconnect hides that account's messages without deleting the database. Local data is not application-encrypted yet. Delete/clear controls and persistent fetch-coverage tracking remain the next increments.
+
+New files for this step are [mail_store.py](mail_store.py) (SQLite operations) and [mail_text.py](mail_text.py) (MIME-to-text conversion); fetching is in [gmail.py](gmail.py), and the UI remains in [main.py](main.py). No new dependencies were added.
+
+Run the checks without Google access or real credentials:
+
+```sh
+uv run --locked python -m unittest discover -s tests -v
+```
+
+Model downloads and inference are not implemented yet.
