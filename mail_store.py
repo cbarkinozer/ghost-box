@@ -1,46 +1,22 @@
-"""Small local message store; each operation closes its SQLite connection."""
-
-import sqlite3
+"""Session-only email storage. No files, database, or disk cache."""
 
 
-def open_database(path):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    db = sqlite3.connect(path)
-    db.row_factory = sqlite3.Row
-    db.execute("""CREATE TABLE IF NOT EXISTS messages (
-        account TEXT, id TEXT, thread_id TEXT, timestamp INTEGER,
-        sender TEXT, recipients TEXT, subject TEXT, body TEXT,
-        PRIMARY KEY (account, id)
-    )""")
-    return db
+class MailStore:
+    def __init__(self):
+        self.accounts = {}
+
+    def replace(self, account, messages):
+        # Called only after a complete fetch; cancellation leaves this untouched.
+        self.accounts[account] = {message["id"]: message for message in messages}
+
+    def clear(self):
+        self.accounts.clear()
 
 
-def save(db, account, message):
-    """Write within the caller's transaction; commit only after a complete fetch."""
-    db.execute(
-        "INSERT OR REPLACE INTO messages VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        (account, *(message[key] for key in (
-            "id", "thread_id", "timestamp", "sender", "recipients", "subject", "body"
-        ))),
-    )
+def messages(store, account):
+    return sorted(store.accounts.get(account, {}).values(),
+                  key=lambda message: (-message["timestamp"], message["id"]))
 
 
-def messages(path, account):
-    db = open_database(path)
-    try:
-        return db.execute(
-            "SELECT id, timestamp, sender, subject FROM messages WHERE account = ? "
-            "ORDER BY timestamp DESC, id", (account,),
-        ).fetchall()
-    finally:
-        db.close()
-
-
-def message(path, account, identifier):
-    db = open_database(path)
-    try:
-        return db.execute(
-            "SELECT * FROM messages WHERE account = ? AND id = ?", (account, identifier)
-        ).fetchone()
-    finally:
-        db.close()
+def message(store, account, identifier):
+    return store.accounts.get(account, {}).get(identifier)

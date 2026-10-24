@@ -1,10 +1,12 @@
 # ghost-box
 
+Caspy now has a small model-selection sidebar. Select the Qwen3.5 MLX preset or choose a local MLX folder; the selection persists using OS-native Qt settings. Selecting a model does not download or load it. Compatibility checks, downloads, and inference are subsequent increments. This panel adds no dependencies.
+
 A lightweight desktop email assistant powered by **Caspy**, your local small language model companion, with on-device inference via MLX and llama.cpp.
 
 Ghost-box helps you summarize email conversations, search downloaded messages, and ask questions with references to the original mail. It is designed for macOS and Windows, with a small Python codebase that is straightforward to read, review, and maintain.
 
-> **Status: Gmail fetch increment.** Read-only Google sign-in works. Manual date/time-range fetching, local SQLite replacement, and a plain-text mail reader are implemented and checked with synthetic data. Live mailbox fetching still needs user verification. Models, search, cleanup controls, and packaging remain planned.
+> **Status: Gmail fetch increment.** Read-only Google sign-in works. Manual date/time-range fetching, RAM-only session replacement, and a plain-text mail reader are implemented and checked with synthetic data. Live mailbox fetching still needs user verification. Models, search, cleanup controls, and packaging remain planned.
 
 ## Purpose
 
@@ -39,20 +41,20 @@ Reduce the time spent reading and finding email while keeping AI processing on t
 | Search | Local keyword and exact-text search, with sender, date, and subject filters |
 | Questions | Answer from retrieved messages and reference the supporting source text |
 | Models | A tested default model download and an option to select an existing local model |
-| Storage | Local SQLite database for messages, search, and application state |
+| Storage | RAM-only email and derived results; no email database or disk cache |
 | Cleanup | Remove downloaded mail and derived local data through an explicit user action |
 
 The application must distinguish **no supporting message found** from **no such message exists**. Answers should state the relevant local search coverage, including the downloaded date range and the last successful fetch.
 
 ## Proposed implementation
 
-The starting stack is **Python, PySide6 (Qt Widgets), and SQLite**. A simple desktop interface avoids the need for a browser engine, JavaScript frontend, or local web server.
+The starting stack is **Python and PySide6 (Qt Widgets)**. A simple desktop interface avoids the need for a browser engine, JavaScript frontend, or local web server.
 
 | Component | Responsibility |
 | --- | --- |
 | PySide6 interface | Display messages, accept questions, and show operation and model status |
 | Python application core | Coordinate fetching, storage, retrieval, and inference |
-| SQLite with FTS5 | Store downloaded mail and provide local full-text search |
+| Python in-memory store | Hold fetched mail only for the current session |
 | Mail connectors | Authenticate with the provider and retrieve messages through read-only APIs |
 | Model worker | Load a local model and stream generated output in a separate process |
 
@@ -93,7 +95,7 @@ Use a bounded, predictable workflow:
 Question → validated filters → local search → selected source messages → answer with references
 ```
 
-Begin with SQLite FTS5 and metadata filters. Do not introduce an embedding model or vector service until actual retrieval failures justify the additional complexity. The model must not execute SQL, shell commands, or arbitrary tools.
+Begin with in-memory text search and metadata filters. Do not introduce an embedding model or vector service until actual retrieval failures justify the additional complexity. The model must not execute SQL, shell commands, or arbitrary tools.
 
 Handle conversation structure, repeated quoted replies, and message dates explicitly. Evaluate Turkish characters, mixed Turkish/English mail, conflicting statements, and questions that cannot be answered from the downloaded messages.
 
@@ -184,7 +186,7 @@ The following setup is performed once by the application maintainer:
 
 The official flow uses a temporary loopback callback listener on `127.0.0.1`, not an application web server. Browser authorization waits up to 60 seconds; network requests have 20-second timeouts. If you abandon sign-in, wait for it to time out before retrying. Closing the application is deferred while an account operation is running.
 
-On startup, the application reads only the locally saved account identity; it does not contact Google or assert that saved credentials remain valid. **Disconnect** removes the local credential entry, without changing mail or revoking Google's server-side grant. To revoke that grant as well, remove Ghost-box from your Google Account's connected applications.
+On startup, the application reads only the locally saved account identity; it does not contact Google or assert that saved credentials remain valid. **Disconnect** removes the local credential entry and clears session mail without modifying Gmail or revoking Google's server-side grant. To revoke that grant as well, remove Ghost-box from your Google Account's connected applications.
 
 Google testing restrictions, restricted-scope verification, and Workspace administrator policies can affect sign-in. See [Google's desktop OAuth documentation](https://developers.google.com/identity/protocols/oauth2/native-app). There is no plaintext-token fallback if the native credential store is unavailable.
 
@@ -192,13 +194,15 @@ Google testing restrictions, restricted-scope verification, and Workspace admini
 
 **From** defaults to today at **00:00** and **To** to today at **23:59**. Both include editable hours and minutes. Times follow this computer's local timezone, and the entire displayed To minute is included (for example, 10:45 includes messages through 10:45:59.999). Filtering uses Gmail's `internalDate`, with epoch-second queries and an exact millisecond boundary check; it does not rely on the email's Date header. See [Google's timezone guidance](https://developers.google.com/workspace/gmail/api/guides/filtering).
 
-Sent mail is included; Spam, Trash, and Drafts are excluded. **Cancel** stops between network requests and discards the incomplete replacement. Each successful Fetch replaces the connected account's previous local messages with the new results, including clearing them when the result is empty. Replacement uses one SQLite transaction: failure or cancellation preserves the previous local emails, while a successful fetch commits the new set. Other accounts' local data is unaffected. No requests are made to mark mail as read or modify Gmail.
+Sent mail is included; Spam, Trash, and Drafts are excluded. **Cancel** stops between network requests and discards the incomplete replacement. Each successful Fetch replaces the connected account's previous local messages with the new results, including clearing them when the result is empty. The pending result is built in RAM: failure or cancellation preserves the previous session emails, while success replaces the set in memory. No requests are made to mark mail as read or modify Gmail.
 
 Select a row to read the message as plain text. HTML-only mail is converted to text without rendering HTML, loading images, or following links. This initial implementation downloads raw MIME, so attachment bytes may be transferred as part of a message, but attachments are not separately extracted, stored, or displayed.
 
-Messages are saved in `mail.sqlite3` under Qt's local application-data directory (`~/Library/Application Support/Ghost-box/` on macOS). The list shows the connected account's most recent successfully fetched set, newest first. Existing data from older versions is replaced on the next successful fetch. Disconnect hides that account's messages without deleting the database. Local data is not application-encrypted yet. Delete/clear controls and persistent fetch-coverage tracking remain the next increments.
+Messages and metadata are held only in process memory. Every launch starts with an empty mail list; only Fetch retrieves mail. Closing the application, disconnecting, or changing accounts clears session mail. Ghost-box does not write email content or derived results to files, databases, or logs. Earlier versions' `mail.sqlite3` and SQLite sidecar files are removed at startup without loading their contents. Removing those files is ordinary deletion, not a guarantee of erasure from backups or storage snapshots. OS swap and crash dumps are outside this application-level RAM-only guarantee.
 
-New files for this step are [mail_store.py](mail_store.py) (SQLite operations) and [mail_text.py](mail_text.py) (MIME-to-text conversion); fetching is in [gmail.py](gmail.py), and the UI remains in [main.py](main.py). No new dependencies were added.
+OAuth credentials remain in the OS credential store, and model selection remains in Qt settings. Model files may be saved to disk in a later download increment; email content must stay in RAM.
+
+New files for this step are [mail_store.py](mail_store.py) (session-only in-memory storage) and [mail_text.py](mail_text.py) (MIME-to-text conversion); fetching is in [gmail.py](gmail.py), and the UI remains in [main.py](main.py). No new dependencies were added.
 
 Run the checks without Google access or real credentials:
 

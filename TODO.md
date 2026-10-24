@@ -2,10 +2,17 @@
 
 Build a small desktop application in reviewable steps. This is a plan, not a list of implemented features. Start with a mostly empty window, then make Gmail usable before adding inference.
 
+## Email retention
+
+- [x] Keep emails and metadata only in RAM; every launch starts empty.
+- [x] Clear session mail on disconnect, account change, and application exit.
+- [x] Remove legacy email database files at startup; never load them.
+- [ ] Keep future summaries, search indexes, and fetch coverage in RAM too.
+
 ## Working rules
 
 - [ ] Keep each increment small, runnable, and easy to read; explain changed files and how to run it.
-- [ ] Use Python, PySide6 Qt Widgets, and standard-library SQLite. No web frontend or HTTP application server.
+- [ ] Use Python and PySide6 Qt Widgets. Keep email content, metadata, and derived results in RAM only. No web frontend or HTTP application server.
 - [ ] Add dependencies only when their benefit outweighs their code and packaging cost; record why each is needed.
 - [ ] Prefer direct functions and small modules. Avoid agent frameworks, repositories/services layers, plugin systems, and speculative abstractions.
 - [ ] Keep long-running work off the UI thread. Add only tests that validate meaningful behavior.
@@ -30,7 +37,7 @@ Build a small desktop application in reviewable steps. This is a plan, not a lis
 - [x] Use the system browser and read-only Gmail OAuth; never ask for a Gmail password.
 - [x] Store tokens in the OS credential store. Explain the chosen OAuth and credential-storage dependencies.
 - [ ] Handle cancelled login, expired/revoked credentials, and connection errors visibly.
-- [x] Disconnect by removing local credentials; do not silently delete downloaded mail.
+- [x] Disconnect by removing local credentials and clearing session mail.
 
 Live Google sign-in was confirmed by the user. Startup reads saved identity locally. Fetch now refreshes expired tokens and reports revoked access; fetching still needs the first live mailbox check.
 
@@ -38,24 +45,24 @@ Live Google sign-in was confirmed by the user. Startup reads saved identity loca
 
 ## 3. Fetch a date range
 
-Date/time controls default to **today 00:00–23:59**, including the entire end minute. Each successful fetch atomically replaces the connected account's previous local emails; failure or cancellation keeps them. Fetch/cancellation status is shown in the UI; durable fetch coverage/history is still pending.
+Date/time controls default to **today 00:00–23:59**, including the entire end minute. Each successful fetch atomically replaces the connected account's previous local emails; failure or cancellation keeps them. Fetch/cancellation status is shown in the UI; session-only fetch coverage is still pending; nothing is restored on launch.
 
 - [x] Add **From**, **To**, and **Fetch**. Reject reversed or invalid ranges.
 - [x] Include editable hours/minutes in local time; the To minute is inclusive, converted to an exclusive next-minute bound.
 - [x] Document whether filtering uses Gmail's internal received timestamp; verify boundary behavior.
 - [x] Fetch only on button press. Support pagination, progress, cancellation, and useful errors.
 - [x] Include Sent; exclude Spam, Trash, and Drafts. Show this scope in the initial reader hint.
-- [x] Store Gmail message/thread IDs, sender, recipients, subject, timestamp, and readable body in SQLite.
+- [x] Store Gmail message/thread IDs, sender, recipients, subject, timestamp, and readable body in session memory only.
 - [x] Handle plain-text and HTML-only messages without rendering active HTML or fetching remote assets. Defer attachments.
-- [x] Replace previous local messages in one transaction after a successful fetch; avoid duplicates and preserve old messages on failure/cancellation.
-- [ ] Record successful fetch coverage and partial/cancelled fetch status honestly; no scheduled synchronization.
+- [x] Replace previous local messages in one in-memory replacement after a successful fetch; avoid duplicates and preserve old messages on failure/cancellation.
+- [ ] Keep successful fetch coverage and partial/cancelled status in memory only; no scheduled synchronization.
 
 **Done when:** a selected range produces browsable local messages, a second fetch creates no duplicates, and boundary dates behave as displayed.
 
 ## 4. Browse, search, and clear local data
 
 - [x] Show a simple sender/subject/date list and readable selected message; group conversations only as needed for summaries.
-- [ ] Add local keyword/exact-text search and sender, subject, and date filters using SQLite/FTS5.
+- [ ] Add local keyword/exact-text search and sender, subject, and date filters using in-memory matching; no disk index.
 - [ ] Add **Delete local copy** for selected messages. Remove associated index entries and derived results; never delete from Gmail.
 - [ ] Explain that a later Fetch can download deleted local messages again; no suppression-list feature initially.
 - [ ] Add **Clear cache** for derived summaries/results while keeping downloaded messages, account, and models.
@@ -66,7 +73,9 @@ Date/time controls default to **today 00:00–23:59**, including the entire end 
 
 ## 5. Model selection and download
 
-**Next increment after code review:** a small Caspy model-selection side panel. Do not implement until the user resumes.
+The Caspy sidebar saves a preset or local-folder selection using Qt settings. It does not download, validate, or load models yet.
+
+- [x] Add a small sidebar with preset/local-folder selection and restore the selection after restart.
 
 Initial preset: [mlx-community/Qwen3.5-4B-MLX-4bit](https://huggingface.co/mlx-community/Qwen3.5-4B-MLX-4bit).
 

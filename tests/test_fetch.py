@@ -1,11 +1,9 @@
-"""Date boundaries, pagination, MIME safety, and local persistence."""
+"""Date boundaries, pagination, MIME safety, and session-only storage."""
 
 import base64
 from datetime import datetime
 import json
 import os
-from pathlib import Path
-import tempfile
 import time
 import unittest
 from unittest.mock import Mock, patch
@@ -28,6 +26,14 @@ def response(data):
 
 
 class FetchTests(unittest.TestCase):
+    def test_session_mail_is_not_restored_and_clear_removes_it(self):
+        mailbox = mail_store.MailStore()
+        mailbox.replace("me@example.com", [decode_message(raw_message("one", 1))])
+        self.assertEqual(len(mail_store.messages(mailbox, "me@example.com")), 1)
+        self.assertEqual(mail_store.messages(mail_store.MailStore(), "me@example.com"), [])
+        mailbox.clear()
+        self.assertIsNone(mail_store.message(mailbox, "me@example.com", "one"))
+
     @unittest.skipUnless(hasattr(time, "tzset"), "timezone override requires tzset")
     def test_local_days_and_dst(self):
         previous = os.environ.get("TZ")
@@ -61,41 +67,38 @@ class FetchTests(unittest.TestCase):
             response(raw_message("end", upper * 1000)),
         ]
         with (
-            tempfile.TemporaryDirectory() as directory,
             patch("gmail.credential_store") as backend,
             patch("gmail.Credentials.from_authorized_user_info") as credentials,
             patch("gmail.AuthorizedSession") as factory,
+            patch("builtins.open", side_effect=AssertionError("Email fetching must not open files")),
         ):
-            path = Path(directory) / "mail.sqlite3"
+            mailbox = mail_store.MailStore()
             backend.return_value.get_password.return_value = json.dumps({
                 "email": "me@example.com", "credentials": {"refresh_token": "fake"},
             })
             credentials.return_value.valid = True
             session = factory.return_value.__enter__.return_value
-            db = mail_store.open_database(path)
-            with db:
-                mail_store.save(db, "me@example.com", decode_message(raw_message("old", 1)))
-                mail_store.save(db, "other@example.com", decode_message(raw_message("other", 1)))
-            db.close()
+            mailbox.replace("me@example.com", [decode_message(raw_message("old", 1))])
+            mailbox.replace("other@example.com", [decode_message(raw_message("other", 1))])
             for _ in range(2):
                 session.get.reset_mock()
                 session.get.side_effect = replies
-                result = gmail.fetch(first, last, path, "me@example.com", Mock(), lambda: False)
+                result = gmail.fetch(first, last, mailbox, "me@example.com", Mock(), lambda: False)
                 self.assertEqual(result, {"count": 1, "cancelled": False})
                 self.assertEqual(session.get.call_args_list[2].kwargs["params"]["pageToken"], "next")
                 query = session.get.call_args_list[0].kwargs["params"]["q"]
                 self.assertIn(f"after:{lower - 1} before:{upper}", query)
-            self.assertEqual(len(mail_store.messages(path, "me@example.com")), 1)
-            self.assertEqual(len(mail_store.messages(path, "other@example.com")), 1)
-            self.assertIsNone(mail_store.message(path, "me@example.com", "old"))
-            self.assertEqual(mail_store.message(path, "me@example.com", "start")["body"], "A private message.")
+            self.assertEqual(len(mail_store.messages(mailbox, "me@example.com")), 1)
+            self.assertEqual(len(mail_store.messages(mailbox, "other@example.com")), 1)
+            self.assertIsNone(mail_store.message(mailbox, "me@example.com", "old"))
+            self.assertEqual(mail_store.message(mailbox, "me@example.com", "start")["body"], "A private message.")
             session.get.reset_mock()
-            result = gmail.fetch(first, last, path, "me@example.com", Mock(), lambda: True)
+            result = gmail.fetch(first, last, mailbox, "me@example.com", Mock(), lambda: True)
             self.assertTrue(result["cancelled"])
             session.get.assert_not_called()
-            self.assertIsNotNone(mail_store.message(path, "me@example.com", "start"))
+            self.assertIsNotNone(mail_store.message(mailbox, "me@example.com", "start"))
 
-            # Cancellation after downloading a message rolls back the whole replacement.
+            # Cancellation after downloading a message discards the pending replacement.
             session.get.side_effect = [
                 response({"messages": [{"id": "replacement"}], "nextPageToken": "next"}),
                 response(raw_message("replacement", lower * 1000)),
@@ -103,21 +106,21 @@ class FetchTests(unittest.TestCase):
             stop = {"value": False}
             def cancel_after_progress(_):
                 stop["value"] = True
-            gmail.fetch(first, last, path, "me@example.com", cancel_after_progress, lambda: stop["value"])
-            self.assertIsNotNone(mail_store.message(path, "me@example.com", "start"))
-            self.assertIsNone(mail_store.message(path, "me@example.com", "replacement"))
+            gmail.fetch(first, last, mailbox, "me@example.com", cancel_after_progress, lambda: stop["value"])
+            self.assertIsNotNone(mail_store.message(mailbox, "me@example.com", "start"))
+            self.assertIsNone(mail_store.message(mailbox, "me@example.com", "replacement"))
 
             # Network failure also preserves the previous mailbox.
             session.get.side_effect = RuntimeError("PRIVATE_RESPONSE")
             with self.assertRaises(gmail.AccountError):
-                gmail.fetch(first, last, path, "me@example.com", Mock(), lambda: False)
-            self.assertIsNotNone(mail_store.message(path, "me@example.com", "start"))
+                gmail.fetch(first, last, mailbox, "me@example.com", Mock(), lambda: False)
+            self.assertIsNotNone(mail_store.message(mailbox, "me@example.com", "start"))
 
             # A complete empty result is a successful replacement with no messages.
             session.get.side_effect = [response({})]
-            gmail.fetch(first, last, path, "me@example.com", Mock(), lambda: False)
-            self.assertEqual(len(mail_store.messages(path, "me@example.com")), 0)
-            self.assertEqual(len(mail_store.messages(path, "other@example.com")), 1)
+            gmail.fetch(first, last, mailbox, "me@example.com", Mock(), lambda: False)
+            self.assertEqual(len(mail_store.messages(mailbox, "me@example.com")), 0)
+            self.assertEqual(len(mail_store.messages(mailbox, "other@example.com")), 1)
 
     def test_html_is_converted_to_text_without_active_content(self):
         raw = b"Content-Type: text/html; charset=utf-8\r\n\r\n<head><style>hide</style></head><p>Hello &amp; welcome</p><script>steal()</script><img src='https://example.com/pixel'>"

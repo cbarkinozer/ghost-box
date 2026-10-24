@@ -11,7 +11,6 @@ from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import AuthorizedSession, Request
 from google.auth.exceptions import RefreshError
 
-import mail_store
 from mail_text import decode_message
 
 SCOPE = "https://www.googleapis.com/auth/gmail.readonly"
@@ -133,10 +132,10 @@ def time_bounds(first, last):
     )
 
 
-def fetch(first, last, path, account, progress, cancelled):
+def fetch(first, last, mailbox, account, progress, cancelled):
     lower, upper = time_bounds(first, last)
     count = 0
-    db = None
+    pending = []
     try:
         store = credential_store()
         saved = json.loads(store.get_password(SERVICE, ACCOUNT) or "{}")
@@ -151,10 +150,6 @@ def fetch(first, last, path, account, progress, cancelled):
                 request.session.close()
             saved["credentials"] = json.loads(credentials.to_json())
             store.set_password(SERVICE, ACCOUNT, json.dumps(saved))
-        db = mail_store.open_database(path)
-        # Delete and insert in one transaction. Closing without commit restores
-        # the previous local mailbox on cancellation or any error.
-        db.execute("DELETE FROM messages WHERE account = ?", (account,))
         with AuthorizedSession(credentials) as session:
             token = None
             while not cancelled():
@@ -178,14 +173,14 @@ def fetch(first, last, path, account, progress, cancelled):
                     check_profile_response(response)
                     data = response.json()
                     if lower * 1000 <= int(data["internalDate"]) < upper * 1000:
-                        mail_store.save(db, account, decode_message(data))
+                        pending.append(decode_message(data))
                         count += 1
                         progress(f"Fetched {count} messages…")
                 token = page.get("nextPageToken")
                 if not token:
                     stopped = cancelled()
                     if not stopped:
-                        db.commit()
+                        mailbox.replace(account, pending)
                     return {"count": count, "cancelled": stopped}
         return {"count": count, "cancelled": True}
     except AccountError:
@@ -198,8 +193,5 @@ def fetch(first, last, path, account, progress, cancelled):
         detail = f"HTTP {status}" if isinstance(status, int) else type(error).__name__
         raise AccountError(
             f"Fetch stopped after {count} messages ({detail}). "
-            "Previous local emails were kept; this incomplete fetch was discarded."
+            "Previous session emails were kept; this incomplete fetch was discarded."
         ) from None
-    finally:
-        if db is not None:
-            db.close()

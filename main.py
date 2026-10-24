@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
 
 import gmail
 import mail_store
+from caspy import ModelPanel
 
 
 def prepare_qt_plugins():
@@ -62,9 +63,13 @@ class Window(QMainWindow):
         self.resize(960, 640)
         self.task = None
         self.email = ""
-        self.database = Path(QStandardPaths.writableLocation(
+        self.mailbox = mail_store.MailStore()
+        # Remove mail files created by earlier versions before showing any mail.
+        old_database = Path(QStandardPaths.writableLocation(
             QStandardPaths.StandardLocation.AppLocalDataLocation
         )) / "mail.sqlite3"
+        for suffix in ("", "-wal", "-shm", "-journal"):
+            Path(str(old_database) + suffix).unlink(missing_ok=True)
 
         toolbar = QToolBar("Account")
         toolbar.setMovable(False)
@@ -100,12 +105,18 @@ class Window(QMainWindow):
         self.mail_list.currentItemChanged.connect(self.read_message)
         self.reader = QPlainTextEdit()
         self.reader.setReadOnly(True)
-        self.reader.setPlaceholderText("Fetch today's mail, then select a message.\nTimes are local. Each successful fetch replaces this account's previous local emails.\nSent mail is included; Spam, Trash, and Drafts are excluded.")
+        self.reader.setPlaceholderText("Fetch today's mail, then select a message.\nTimes are local. Each successful fetch replaces this account's previous session emails.\nMail is held in memory only and disappears when you close the app.\nSent mail is included; Spam, Trash, and Drafts are excluded.")
         splitter = QSplitter()
         splitter.addWidget(self.mail_list)
         splitter.addWidget(self.reader)
         splitter.setSizes([320, 640])
-        self.setCentralWidget(splitter)
+        content = QSplitter()
+        content.addWidget(splitter)
+        content.addWidget(ModelPanel())
+        content.setSizes([700, 260])
+        content.setStretchFactor(0, 1)
+        content.setStretchFactor(1, 0)
+        self.setCentralWidget(content)
         self.start(gmail.saved_account)
 
     def start(self, operation, success=None):
@@ -127,6 +138,8 @@ class Window(QMainWindow):
         self.statusBar().showMessage("Complete Google sign-in in your browser (60-second timeout)…")
 
     def show_account(self, email):
+        if email != self.email:
+            self.mailbox.clear()
         self.email = email
         self.statusBar().showMessage(
             f"Saved account: {email} · Read-only"
@@ -138,7 +151,7 @@ class Window(QMainWindow):
         self.mail_list.clear()
         self.reader.clear()
         if self.email:
-            for message in mail_store.messages(self.database, self.email):
+            for message in mail_store.messages(self.mailbox, self.email):
                 date = datetime.fromtimestamp(message["timestamp"] / 1000).strftime("%Y-%m-%d %H:%M")
                 item = QListWidgetItem(f"{date} · {message['sender']}\n{message['subject']}")
                 item.setData(Qt.ItemDataRole.UserRole, message["id"])
@@ -148,7 +161,7 @@ class Window(QMainWindow):
         if not item:
             self.reader.clear()
             return
-        message = mail_store.message(self.database, self.email, item.data(Qt.ItemDataRole.UserRole))
+        message = mail_store.message(self.mailbox, self.email, item.data(Qt.ItemDataRole.UserRole))
         if message:
             self.reader.setPlainText(
                 f"From: {message['sender']}\nTo: {message['recipients']}\n"
@@ -163,7 +176,7 @@ class Window(QMainWindow):
             return
         account = self.email
         self.start(lambda: gmail.fetch(
-            first, last, self.database, account,
+            first, last, self.mailbox, account,
             self.task.progress.emit, self.task.isInterruptionRequested,
         ), self.fetched)
         self.cancel_button.setEnabled(True)
@@ -171,7 +184,7 @@ class Window(QMainWindow):
 
     def fetched(self, result):
         self.refresh_messages()
-        state = "Fetch cancelled; previous emails kept" if result["cancelled"] else "Fetch complete; previous local emails replaced"
+        state = "Fetch cancelled; previous emails kept" if result["cancelled"] else "Fetch complete; previous session emails replaced"
         self.statusBar().showMessage(
             f"{state}. {result['count']} messages processed."
         )
@@ -197,6 +210,9 @@ class Window(QMainWindow):
             self.statusBar().showMessage("Stopping; waiting for the current request or sign-in timeout before closing. Close again when finished.")
             event.ignore()
         else:
+            self.mailbox.clear()
+            self.mail_list.clear()
+            self.reader.clear()
             event.accept()
 
 
