@@ -131,14 +131,14 @@ class WorkStepTests(unittest.TestCase):
         self.assertEqual(sum(row['action']=='summary_retry' for row in steps.rows.values()),2)
         self.assertEqual(sum(row['state']=='failed' for row in steps.rows.values()),3)
         overview=next(row for row in steps.rows.values() if row['action']=='summary_overview')
-        self.assertEqual(overview['state'],'skipped')
-        self.assertFalse(any(row['state']=='done' for row in steps.rows.values()))
+        self.assertEqual(overview['state'],'done')
+        self.assertEqual(sum(row['state']=='done' for row in steps.rows.values()),1)
 
     def test_failed_step_click_explains_fixed_reason_without_raw_output(self):
         view=WorkSteps();view.restore([], 'Turkish')
         view.update_step(dict(step_id=1,action='summary_extract',sources=[1],state='failed',reason='invalid_json'))
         texts=[]
-        with patch('ghost_box.ui.work_steps.QMessageBox.exec',new=lambda dialog:texts.append(dialog.text())):
+        with patch('ghost_box.ui.work_steps.QMessageBox.open',new=lambda dialog:texts.append(dialog.text())):
             view.show_details(view.list.item(0))
         self.assertIn('JSON',texts[0])
         self.assertIn('Kaynak 1',texts[0])

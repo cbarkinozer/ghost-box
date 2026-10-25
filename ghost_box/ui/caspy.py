@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (
 
 from ..models import download as model_download
 from ..models import settings as inference_settings
-from ..models.download import PRESET
+from ..models.download import PRESET, GGUF_PRESET
 from ..models.projection import describe
 
 
@@ -18,13 +18,14 @@ class DownloadTask(QThread):
     progress = Signal(str)
     outcome = Signal(str)
 
-    def __init__(self, folder, parent):
+    def __init__(self, folder, parent, manifest=None):
         super().__init__(parent)
         self.folder = folder
+        self.manifest = manifest
 
     def run(self):
         try:
-            model_download.download(self.folder, self.progress.emit, self.isInterruptionRequested)
+            model_download.download(self.folder, self.progress.emit, self.isInterruptionRequested, self.manifest)
             self.outcome.emit("Download complete. Model is available locally.")
         except model_download.DownloadCancelled:
             self.outcome.emit("Download cancelled. Completed files are kept for retry.")
@@ -46,12 +47,14 @@ class ModelPanel(QWidget):
         self.model_folder = Path(QStandardPaths.writableLocation(
             QStandardPaths.StandardLocation.AppLocalDataLocation
         )) / "models" / model_download.REVISION
+        self.gguf_folder = self.model_folder.parent / model_download.GGUF_MANIFEST["revision"]
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel("<b>👻 Caspy</b>"))
         layout.addWidget(QLabel("Local model"))
         self.selector = QComboBox()
         self.selector.addItem("No model selected", "")
         self.selector.addItem("Qwen3.5 · 4B · MLX 4-bit", PRESET)
+        self.selector.addItem("Qwen3.5 · 4B · GGUF Q4_K_M", GGUF_PRESET)
         layout.addWidget(self.selector)
         choose = QPushButton("Choose local MLX folder…")
         self.choose = choose
@@ -132,7 +135,7 @@ class ModelPanel(QWidget):
         layout.addStretch()
 
         selected = self.settings.value("model/selection", "", type=str)
-        if selected and selected != PRESET:
+        if selected and selected not in model_download.PRESETS:
             self.selector.addItem("Local: " + Path(selected).name, selected)
         self.selector.setCurrentIndex(max(0, self.selector.findData(selected)))
         self.selector.currentIndexChanged.connect(self.save_selection)
@@ -152,10 +155,10 @@ class ModelPanel(QWidget):
 
     def select_local(self, path):
         # Keep just one custom folder in the small selector.
-        if self.selector.count() > 2:
-            self.selector.removeItem(2)
+        if self.selector.count() > 3:
+            self.selector.removeItem(3)
         self.selector.addItem("Local: " + Path(path).name, path)
-        self.selector.setCurrentIndex(2)
+        self.selector.setCurrentIndex(3)
 
     def save_selection(self):
         self.settings.setValue("model/selection", self.selector.currentData())
@@ -199,16 +202,24 @@ class ModelPanel(QWidget):
         except (OSError, ValueError, KeyError, TypeError, AttributeError):
             self.parameter_status.setText('Could not save profile. Check JSON format and folder permissions.')
 
+    def preset_folder(self, selected):
+        return self.model_folder if selected == PRESET else self.gguf_folder
+
     def update_status(self):
         selected = self.selector.currentData()
-        downloaded = model_download.ready(self.model_folder)
-        self.download_button.setText("Preset downloaded" if downloaded else "Download preset (~3.1 GB)")
-        self.download_button.setEnabled(selected == PRESET and not downloaded and self.task is None)
+        manifest = model_download.PRESETS.get(selected)
+        folder = self.preset_folder(selected)
+        downloaded = bool(manifest and model_download.ready(folder, manifest))
+        size = sum(item['size'] for item in manifest['files']) / 10**9 if manifest else 0
+        self.download_button.setText("Preset downloaded" if downloaded else
+                                     f"Download preset (~{size:.1f} GB)" if manifest else "Download preset")
+        self.download_button.setEnabled(bool(manifest) and not downloaded and self.task is None)
         if not selected:
             text = "No model selected."
-        elif selected == PRESET:
+        elif manifest:
             state = "Preset downloaded." if downloaded else "Not downloaded completely."
-            text = state + "\nMLX requires Apple Silicon."
+            text = state + ("\nMLX requires Apple Silicon." if selected == PRESET else
+                            "\nGGUF uses llama.cpp · Windows/macOS.")
         elif Path(selected).suffix.lower() == '.gguf' and Path(selected).is_file():
             text = 'Local GGUF selected; llama.cpp backend.'
         elif not Path(selected).is_dir():
@@ -216,10 +227,14 @@ class ModelPanel(QWidget):
         else:
             text = "Local folder selected; model compatibility has not been checked."
         self.status.setText(text)
-        self.status.setToolTip(str(self.model_folder) if selected == PRESET else selected)
+        self.status.setToolTip(str(folder) if manifest else selected)
 
     def download_preset(self):
-        self.task = DownloadTask(self.model_folder, self)
+        selected = self.selector.currentData()
+        manifest = model_download.PRESETS.get(selected)
+        if manifest is None or self.task is not None:
+            return
+        self.task = DownloadTask(self.preset_folder(selected), self, manifest)
         self.selector.setEnabled(False)
         self.choose.setEnabled(False)
         self.choose_gguf.setEnabled(False)
@@ -243,13 +258,18 @@ class ModelPanel(QWidget):
         outcome = self.status.text()
         self.update_status()
         self.update_projection()
-        if not model_download.ready(self.model_folder):
+        manifest = model_download.PRESETS.get(self.selector.currentData())
+        if not manifest or not model_download.ready(self.preset_folder(self.selector.currentData()), manifest):
             self.status.setText(outcome)
 
     def selected_folder(self):
         selected = self.selector.currentData()
-        if selected == PRESET:
-            return self.model_folder if model_download.ready(self.model_folder) else None
+        manifest = model_download.PRESETS.get(selected)
+        if manifest:
+            folder = self.preset_folder(selected)
+            if not model_download.ready(folder, manifest):
+                return None
+            return folder if selected == PRESET else folder / manifest['files'][0]['name']
         if selected:
             path = Path(selected)
             if path.is_dir() or (path.suffix.lower() == '.gguf' and path.is_file()):

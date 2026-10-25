@@ -2,7 +2,7 @@
 
 ![Caspy](assets/caspy.png)
 
-Caspy has a small model-selection sidebar. Select the Qwen3.5 MLX preset and click **Download preset**, or choose a local MLX folder. Selection persists in Qt settings. Downloading does not load a model. Optional MLX and llama.cpp inference answer questions and summarize explicitly selected emails in a separate process, with bounded batching for large selections.
+Caspy has a small model-selection sidebar. Select the Qwen3.5 MLX or GGUF Q4_K_M preset and click **Download preset**, or choose a local MLX folder/GGUF file. Selection persists in Qt settings. Downloading does not load a model. Local MLX and llama.cpp inference answer questions and summarize explicitly selected emails in a separate process, with bounded batching for large selections.
 
 A lightweight desktop email assistant powered by **Caspy**, your local small language model companion, with on-device inference via MLX and llama.cpp.
 
@@ -166,9 +166,13 @@ uv run --locked main.py
 
 uv creates the local `.venv` and installs the locked dependencies on first launch. Python 3.11 or newer is required; uv can provision a compatible interpreter.
 
+On **Windows x64**, that same command installs pinned `llama-cpp-python==0.3.36` from the upstream prebuilt CPU wheel; its URL and SHA-256 are locked in `uv.lock`, so a compiler/CMake build is not required. Select **Qwen3.5 · 4B · GGUF Q4_K_M**, click **Download preset**, then **Load**. CPU inference is the initial Windows path; CUDA/Vulkan builds and Windows ARM64 are not configured. Windows dependency resolution was checked from macOS with `uv sync --locked --python-platform x86_64-pc-windows-msvc --dry-run`; actual Windows execution and packaged distribution still need validation. The existing macOS `inference`/`gguf` extras remain optional.
+
 The launcher is [main.py](main.py); the desktop interface is in [window.py](ghost_box/ui/window.py). The UI dependency in [pyproject.toml](pyproject.toml) is **PySide6-Essentials**, which provides Qt Widgets without the additional PySide6 Addons package. Its required binding library, shiboken6, is installed transitively. [uv.lock](uv.lock) records exact dependency versions.
 
 PySide6-Essentials remains pinned to the checked version, 6.10.2. A recurring Cocoa discovery error on the development Mac was traced to macOS hidden flags on installed plugin files; changing Qt versions alone did not fix that underlying cause. Before creating the application, `prepare_qt_plugins()` clears only the hidden flag within the installed Qt plugin directory on macOS, preserving other file flags. This handles the condition on each launch without a manual repair command or additional dependency. The source of the recurring hidden flags has not been identified.
+
+On this development Mac, native Cocoa testing also reproduced `TSMSendMessageToUIServer: CFMessagePortSendRequest FAILED(-1) ... com.apple.tsm.uiserver` diagnostics while the window and read-only dialogs continued to open/close. Their underlying macOS text-input service cause is not established. Diagnostics and step-detail dialogs now use asynchronous `open()` with explicit lifetime cleanup, following [Qt's guidance](https://doc.qt.io/qt-6/qdialog.html#exec) to avoid nested dialog event loops. The native message still occurred during this smoke check, so this is **not a confirmed fix** for that OS diagnostic. stderr is not globally suppressed.
 
 The account toolbar is implemented in [window.py](ghost_box/ui/window.py); [gmail.py](ghost_box/mail/gmail.py) handles OAuth and native credential storage. Two additional direct dependencies are `google-auth-oauthlib` for Google's browser-based OAuth with PKCE, and `keyring` for macOS Keychain / Windows Credential Manager. Their transitive dependencies are recorded in the lockfile. The full Gmail API SDK is not installed.
 
@@ -213,7 +217,14 @@ uv run --locked python -m unittest discover -s tests -v
 
 ### Model downloads
 
-**Download preset** retrieves only the selected public preset from Hugging Face. No mail is included in model-download requests. The approximately 3.1 GB download is pinned to revision `32f3e8ecf65426fc3306969496342d504bfa13f3`; file sizes and SHA-256/Git blob hashes are recorded in `ghost_box/models/data/model_manifest.json`. Files are verified before promotion from `.part` files; completion is recorded only after every file succeeds. Startup checks the completion record and sizes, not full weight hashes; retrying rechecks hashes.
+**Download preset** retrieves only the selected public preset from Hugging Face. No mail is included in model-download requests. Both presets use the same small downloader and verify every file before promotion from `.part`; completion is recorded only after all files succeed. Startup checks the completion record and sizes, while retrying rechecks hashes.
+
+| Preset | Download | Pinned revision | Manifest |
+| --- | --- | --- | --- |
+| MLX 4-bit | approximately 3.1 GB | `32f3e8ecf65426fc3306969496342d504bfa13f3` | `ghost_box/models/data/model_manifest.json` |
+| GGUF Q4_K_M | 3,013,027,808 bytes | `4168f45a16a1290d65a4ec0fa312ae917a4c15d6` | `ghost_box/models/data/gguf_manifest.json` |
+
+The GGUF artifact is [Qwen_Qwen3.5-4B-Q4_K_M.gguf](https://huggingface.co/bartowski/Qwen_Qwen3.5-4B-GGUF/blob/4168f45a16a1290d65a4ec0fa312ae917a4c15d6/Qwen_Qwen3.5-4B-Q4_K_M.gguf), with SHA-256 `13c16f426047e2de38cd075bdade4a7bcbc8c774384876f677740cda65f8a983`. Only the text model is downloaded; no vision projector is required for email. Both presets start with a 2,048-token output budget and support per-model numeric overrides. Existing settings files pick up the built-in GGUF defaults when no custom profile exists; saved user values are preserved.
 
 Models live under Qt's application-data directory at `models/<revision>/` (`~/Library/Application Support/Ghost-box/models/` on macOS). This is separate from session-only emails. There is no duplicate Hub cache. Cancel removes the current partial file; verified completed files are reused on retry. Transfers interrupted within one file restart that file. Closing during a download requests cancellation; close again after it stops. Network reads have 20-second timeouts.
 
@@ -228,7 +239,7 @@ On Apple Silicon macOS, install the optional runtime and launch with:
 uv run --locked --extra inference main.py
 ```
 
-The base launch remains available without inference dependencies. The `inference` extra pins `mlx-lm==0.32.2`, using text-only MLX support rather than a vision runtime; transitive versions are locked in `uv.lock`. Importing MLX happens only inside the on-demand worker, never at UI startup.
+On macOS the base launch remains available without inference dependencies; on Windows x64 it includes the CPU llama.cpp runtime. The `inference` extra pins `mlx-lm==0.32.2`, using text-only MLX support rather than a vision runtime; transitive versions are locked in `uv.lock`. Importing MLX happens only inside the on-demand worker, never at UI startup.
 
 Fetch mail, then use Cmd/Ctrl-click or Shift-click to select messages, or **Select all** to include every fetched message. Type a question and press **Ask emails**. Only selected emails' IDs, timestamps, headers, and bodies enter the request. Known source citations, including `[2]`, `[Kaynak: 2]`, `kaynak:2`, and common Source/Kaynak label variants, become numbered links; clicking one opens that email in the preview without changing the selection for the next question. Hovering shows its subject and sender. Unknown references and external/file URLs do not navigate. Markdown rendering disables raw HTML and blocks resource loading, including local and remote images. Unselected emails and previous answers are not included. Each request has an explicit email scope. Use Follow up to include the previous answer and request as context; a warm runtime alone does not retain conversational intent.
 
@@ -325,11 +336,11 @@ Summarize groups emails by the fully templated tokenizer budget and a conservati
 
 The model returns one flat record per email/excerpt: `key`, `kind`, `text`, and a local integer `evidence` passage ID. JSON Lines and complete JSON arrays are accepted; application-owned identities, categories, field types and passage IDs are still checked. The app attaches the chosen original passage rather than asking the model to reproduce quotations, and checks that it belongs to that exact email excerpt. Valid independent records are kept when another record fails; only missing, empty or invalid records receive at most one extra extraction attempt within the call budget. Invalid JSON lines are never repaired or guessed. Duplicate identities cannot be salvaged into accepted findings. Excerpts without readable passages cannot supply invented evidence.
 
-The final overview appears **above** the mail cards. Its model call selects existing fact IDs rather than generating new claims or source numbers. Large evidence sets can require additional selection calls. Selection determines priority; the app groups findings into one overview bullet per email, including its subject and one source link. Emails without a summary remain visible with an explicit missing-summary notice, so one successful email cannot silently stand in for the whole selection. This reduces opportunities for cross-email attribution mistakes; quotation matching still does not prove that a paraphrase correctly interprets its quotation. Classification and summary quality require evaluation.
+The final overview appears **above** the mail cards. It is assembled entirely in application code from the existing source-bound findings: model-estimated action requests first, then reply requests, information, and unclear records; within those groups observed To/CC/other/sent role and original source order provide stable tie-breaks. The app groups findings into one bullet per email with its subject and source link. There is **no overview-ranking LLM call**, generated schema, or extra reduction workflow to fail. This ordering is a transparent heuristic, not an assertion of business importance or responsibility. Emails without a summary remain visible. Matching quotations still do not establish that a paraphrase correctly interprets them; factual quality needs evaluation.
 
 Cards render incrementally as batches finish and are separated by horizontal rules. Empty model findings receive at most one additional batched extraction attempt within the task budget. If extraction still fails, the card shows a clearly labeled original-text excerpt rather than an invented summary; its classification can remain unclear. Each has source, subject, sender, local timestamp, your observed To/CC/sent role, recipient counts, attachment count, and an explicitly labeled **model estimate** (information, reply requested, action requested, or unclear). To/CC comes from real MIME headers; it is not inferred by the model. A CC role alone does not prove a message is unimportant, nor does To alone prove responsibility. The selected response language is supplied explicitly in the extraction system prompt and retained across retries; generated summaries use it, while subjects and evidence quotations retain their original language. An explicit language request in the question may override the default. Quotes stay visible beside their paraphrases. Reply, Reply all, and Forward links open the source-bound compose dialog.
 
-A synthetic 20-email check on this Mac completed with 20 quote-checked cards in **five model calls** (four batches and an overview); this is an example, not a fixed performance promise. Email lengths, output settings, model formatting, and retries affect the count. The same warm model is reused. All mail, evidence records, cards, drafts, and conversation context remain in RAM.
+Summary model-call counts now include only extraction and bounded retries. The final overview step is local and adds no LLM call. Input sizes, output settings, model formatting and retries affect latency; the same warm model is reused. All mail, evidence records, cards, drafts, and conversation context remain in RAM.
 
 ### Visible work steps
 

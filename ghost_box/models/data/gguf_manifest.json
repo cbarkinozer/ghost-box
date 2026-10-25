@@ -1,0 +1,12 @@
+{
+  "repo": "bartowski/Qwen_Qwen3.5-4B-GGUF",
+  "revision": "4168f45a16a1290d65a4ec0fa312ae917a4c15d6",
+  "files": [
+    {
+      "name": "Qwen_Qwen3.5-4B-Q4_K_M.gguf",
+      "size": 3013027808,
+      "algorithm": "sha256",
+      "digest": "13c16f426047e2de38cd075bdade4a7bcbc8c774384876f677740cda65f8a983"
+    }
+  ]
+}

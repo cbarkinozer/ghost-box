@@ -43,4 +43,11 @@ class LayoutTests(unittest.TestCase):
                 self.app.processEvents()
                 self.assertGreater(window.work_steps.list.width(),with_model)
                 self.assertGreater(window.question.y(),window.output_tabs.geometry().bottom())
+                window.show_diagnostics()
+                dialog=window.diagnostics_dialog
+                self.assertIsNotNone(dialog)
+                window.show_diagnostics()
+                self.assertIs(window.diagnostics_dialog,dialog)
+                dialog.reject()
+                self.assertIsNone(window.diagnostics_dialog)
                 window.close()

@@ -15,7 +15,7 @@ LABELS = {
     'answer_combine': ('Bulguları birleştirip son yanıtı hazırla', 'Combine evidence into the final answer'),
     'summary_extract': ('Mail özetlerini çıkar ve alıntıları doğrula', 'Extract summaries and check quotations'),
     'summary_retry': ('Eksik/geçersiz özetleri yeniden dene', 'Retry missing or invalid summaries'),
-    'summary_overview': ('Bulguları genel bakış için önceliklendir', 'Prioritize findings for the overview'),
+    'summary_overview': ('Genel bakışı oluştur (yerel sıralama)', 'Build the overview (local ordering)'),
     'overview_reduce': ('Genel bakış adaylarını kısalt', 'Reduce overview candidates'),
 }
 STATES = {
@@ -115,7 +115,8 @@ class WorkSteps(QWidget):
         dialog.setWindowTitle('İşlem ayrıntısı' if tr else 'Step details')
         dialog.setTextFormat(Qt.TextFormat.PlainText)
         dialog.setText(text)
-        dialog.exec()
+        dialog.finished.connect(dialog.deleteLater)
+        dialog.open()
 
     def finish(self, status):
         for row in self.rows:

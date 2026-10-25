@@ -24,6 +24,7 @@ CODES = {
     'retry_split': 'Reddedilen grup daha küçük gruplarla yeniden denenecek.',
     'retry_empty': 'Boş bulgular için tek ek toplu deneme planlandı.',
     'retry_budget_exhausted': 'Ek deneme için çağrı bütçesi kalmadı.',
+    'overview_local': 'Genel bakış mevcut bulgulardan yerel kodla sıralandı; LLM çağrısı yapılmadı.',
     'overview_fallback': 'Genel bakış sıralaması doğrulanamadı; mevcut bulgular kullanıldı.',
 }
 

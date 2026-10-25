@@ -7,6 +7,7 @@ dependencies = [
     "google-auth-oauthlib>=1.5.0",
     "keyring>=25.7.0",
     "pyside6-essentials==6.10.2",
+    "llama-cpp-python==0.3.36 ; sys_platform == 'win32'",
 ]
 
 [project.optional-dependencies]
@@ -15,4 +16,10 @@ inference = [
 ]
 gguf = [
     "llama-cpp-python==0.3.36",
+]
+
+# Official prebuilt CPU wheel; other platforms keep their optional PyPI runtime.
+[tool.uv.sources]
+llama-cpp-python = [
+    { url = "https://github.com/abetlen/llama-cpp-python/releases/download/v0.3.36/llama_cpp_python-0.3.36-py3-none-win_amd64.whl", marker = "sys_platform == 'win32'" },
 ]

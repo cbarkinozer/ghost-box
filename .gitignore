@@ -1,3 +1,4 @@
+.DS_STORE
 # Byte-compiled / optimized / DLL files
 # Local OAuth configuration and future private application fixtures
 .local/

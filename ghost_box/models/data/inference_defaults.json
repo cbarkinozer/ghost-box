@@ -1,6 +1,7 @@
 {
   "sources": {
-    "mlx-community/Qwen3.5-4B-MLX-4bit": "https://huggingface.co/Qwen/Qwen3.5-4B#best-practices"
+    "mlx-community/Qwen3.5-4B-MLX-4bit": "https://huggingface.co/Qwen/Qwen3.5-4B#best-practices",
+    "bartowski/Qwen_Qwen3.5-4B-GGUF": "https://huggingface.co/Qwen/Qwen3.5-4B#best-practices"
   },
   "default": {
     "temperature": 0.7,
@@ -15,6 +16,15 @@
   },
   "profiles": {
     "mlx-community/Qwen3.5-4B-MLX-4bit": {
+      "temperature": 0.7,
+      "top_p": 0.8,
+      "top_k": 20,
+      "min_p": 0.0,
+      "presence_penalty": 1.5,
+      "repetition_penalty": 1.0,
+      "max_output_tokens": 2048
+    },
+    "bartowski/Qwen_Qwen3.5-4B-GGUF": {
       "temperature": 0.7,
       "top_p": 0.8,
       "top_k": 20,

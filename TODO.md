@@ -134,7 +134,7 @@ Initial preset: [mlx-community/Qwen3.5-4B-MLX-4bit](https://huggingface.co/mlx-c
 
 - [x] Add Summarize for selected emails with optional RAM-only instructions.
 - [x] Batch emails by input/output budget; validate keyed records and exact source quotations.
-- [x] Render batch cards incrementally and place an extractive, source-bound overview first.
+- [x] Render batch cards incrementally and assemble a source-bound overview locally; order by estimated request type, observed To/CC role, and source order without another LLM call.
 - [x] Use flat summary records selecting numbered original evidence passages; omit URL tokens from summary context, retain valid neighboring records, and retry only missing/invalid/empty findings once within budget.
 - [x] Give answers and work steps full-area tabs, put the question field below output, fold email preview during inference, and make the model sidebar optional. Click failed steps for RAM-only failure details.
 - [x] Add RAM-only, per-message summary diagnostics: fixed rejection/classification/retry codes, source ordinals, call counts, input-token counts, output-character counts, and call timings; cap records and allow explicit content-free copying without a log file.
@@ -190,7 +190,9 @@ Start with approximately 20–30 synthetic messages across a few threads and 10 
 
 - [x] Add local GGUF selection and optional pinned llama.cpp Python backend; smoke-test on macOS.
 - [ ] Validate native Windows execution and distribute the llama.cpp runtime in packaged builds.
-- [ ] Select and validate a Windows preset separately; the MLX preset is Apple-Silicon-only.
+- [x] Add a pinned, SHA-256-verified Qwen3.5 GGUF Q4_K_M download preset beside MLX; preserve independent selection/settings and custom model paths.
+- [x] Include the pinned upstream Windows x64 CPU llama.cpp wheel in the base `uv run --locked main.py` environment; verify Windows dependency resolution without changing the macOS extras.
+- [ ] Validate the selected GGUF preset on real Windows hardware; macOS cross-platform resolution is not native Windows validation.
 - [ ] Add Outlook only after the Gmail workflow is complete.
 - [ ] Package native applications and verify startup, idle memory, downloads, credentials, and worker shutdown on supported devices.
 - [ ] Review local data protection, retention, backups, dependencies, and network boundaries before broader confidential use.
@@ -209,7 +211,10 @@ No Docker distribution, separate application SSO, automatic fetching, automatic 
 
 ## Current increment validation
 
-- [x] Synthetic model check: 20 emails, 20 quote-checked cards, five calls on this Mac.
+- [x] Historical synthetic check: 20 emails/20 quote-checked cards in five calls; this preceded removal of the overview LLM call.
+- [x] Regression test: overview ordering uses existing findings only and cannot call a model or fail JSON parsing.
+- [x] Current synthetic MLX check: 10 emails yielded 10 source-checked summary records in two extraction calls (15.8 seconds on this Mac); local overview added no model call. This does not establish semantic accuracy.
+- [x] Native Cocoa diagnostics/details dialog smoke check; OS TSM messages still reproduced, without a crash in that check. Keep the OS diagnostic investigation open; do not hide stderr.
 - [x] Local Turkish reply drafting without a send grant or delivery.
 - [x] Mocked send tests: canceled approval makes no call, approved payload stays frozen, success prevents duplicate submission, ambiguous failure is not retried.
 - [ ] Broader summary accuracy, adversarial mail, real Gmail delivery, and native Windows checks remain required before broad use.

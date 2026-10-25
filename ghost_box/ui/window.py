@@ -383,15 +383,19 @@ class Window(QMainWindow):
             self.diagnostics_dialog.refresh(self.diagnostic_rows)
 
     def show_diagnostics(self):
+        if self.diagnostics_dialog is not None:
+            self.diagnostics_dialog.raise_()
+            self.diagnostics_dialog.activateWindow()
+            return
         dialog = DiagnosticsDialog(self)
         self.diagnostics_dialog = dialog
         dialog.refresh(self.diagnostic_rows)
-        try:
-            dialog.exec()
-        finally:
+        def closed():
             dialog.text.clear()
             self.diagnostics_dialog = None
             dialog.deleteLater()
+        dialog.finished.connect(closed)
+        dialog.open()
 
     def invalidate_answer(self):
         if self.answer_running:
@@ -577,7 +581,8 @@ class Window(QMainWindow):
     def model_state_changed(self, *_):
         state = self.runtime.state
         folder = self.runtime.folder
-        name = 'Qwen3.5 4B' if folder == self.caspy.model_folder else folder.name if folder else ''
+        name = ('Qwen3.5 4B · MLX' if folder == self.caspy.model_folder else
+               'Qwen3.5 4B · GGUF' if folder and folder.parent == self.caspy.gguf_folder else folder.name if folder else '')
         descriptions = {'unloaded': 'Model: unloaded', 'loading': f'Loading: {name}',
                         'ready': f'Loaded: {name}\nIdle · auto-unload after 5 min',
                         'generating': f'Loaded: {name} · generating', 'unloading': f'Unloading: {name}'}

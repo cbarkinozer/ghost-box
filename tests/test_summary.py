@@ -189,3 +189,29 @@ class SummaryTests(unittest.TestCase):
         self.assertEqual(len(checked_items(raw,[piece])),1)
         with self.assertRaises(TaskError):
             checked_items(raw.replace('1:1','other-email'),[piece])
+
+    def test_overview_is_local_and_never_requests_model_json(self):
+        from ghost_box.mail.steps import Steps
+        calls,published,step_events=[],[],[]
+        messages=[mail('newsletter','This is an information newsletter.'),
+                  mail('payment','Please update your payment information.'),
+                  mail('invitation','Please reply to this invitation.')]
+        kinds=['information','action_requested','reply_requested']
+        def generate(prompt,maximum):
+            system,user=prompt
+            self.assertIn('Extract facts',system)
+            calls.append(prompt)
+            items=json.loads(user.split('Selected emails (JSON):\n')[1].split('\nItem keys:')[0])
+            yield json.dumps([dict(key=item['key'],kind=kind,text=item['subject'],evidence=1)
+                              for item,kind in zip(items,kinds)])
+        steps=Steps(lambda kind,**value:step_events.append(value.copy()))
+        summarize(messages,'Summary',dict(max_input_tokens=7680,max_output_tokens=2048,max_tasks=8),
+                  lambda system,user:((system,user),1),generate,lambda *args:None,lambda text:None,
+                  publish=lambda kind,**value:published.append((kind,value)),account='me@example.com',steps=steps)
+        self.assertEqual(len(calls),1)
+        final=[value for kind,value in published if kind=='summary'][-1]
+        overview=final['markdown'].split('## Email details')[0]
+        self.assertLess(overview.index('[Source 2]'),overview.index('[Source 3]'))
+        self.assertLess(overview.index('[Source 3]'),overview.index('[Source 1]'))
+        self.assertTrue(any(kind=='diagnostic' and value['code']=='overview_local' for kind,value in published))
+        self.assertTrue(all(row['state']=='done' for row in steps.rows.values()))

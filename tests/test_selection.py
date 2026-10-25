@@ -129,7 +129,7 @@ class SelectionTests(unittest.TestCase):
                 window.caspy.save_parameters()
                 window.caspy.selector.setCurrentIndex(1)
                 self.assertEqual(window.caspy.parameters()['temperature'], 0.7)
-                window.caspy.selector.setCurrentIndex(2)
+                window.caspy.selector.setCurrentIndex(window.caspy.selector.findData(str(gguf)))
                 self.assertEqual(window.caspy.parameters()['temperature'], 0.25)
                 window.close()
                 self.assertFalse(window.answer.sources)

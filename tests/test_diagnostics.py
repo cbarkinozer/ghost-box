@@ -68,7 +68,7 @@ class DiagnosticsTests(unittest.TestCase):
         diagnostics=[value for kind,value in events if kind=='diagnostic']
         codes={row['code'] for row in diagnostics}
         self.assertTrue({'invalid_json','retry_split','quote_mismatch',
-                         'classification_quote_mismatch','overview_fallback'} <= codes)
+                         'classification_quote_mismatch','overview_local'} <= codes)
         self.assertEqual(len([row for row in diagnostics if row['code']=='call_complete']),len(calls))
         self.assertNotIn('PRIVATE_',report(diagnostics))
         self.assertNotIn('private@example.com',report(diagnostics))

@@ -10,7 +10,7 @@ from .context import with_language
 from .metadata import details
 from .diagnostics import SummaryError
 from .steps import Steps
-from .tasks import TaskError, pack, split_emails
+from .tasks import TaskError, split_emails
 
 KINDS = ('information', 'reply_requested', 'action_requested', 'unclear')
 EXTRACT = (
@@ -29,26 +29,10 @@ EXTRACT = (
     'If no passage supports a summary, return text="", evidence=null, kind="unclear". Process ALL keys.'
 )
 
-OVERVIEW = (
-    'Choose the most useful facts for a brief executive overview. Return ONLY JSON '
-    '{"facts":["1.1","3.1"]}. Use only supplied fact IDs, without duplicates. '
-    'Prefer explicit requests/decisions/deadlines; recipient role is context, not proof of responsibility. '
-    'Choose up to the requested maximum. Do not write or rewrite any claims.'
-)
-
 
 def markdown_text(text):
     return re.sub(r'([\\`*_{}\[\]()<>#+.!|:])', r'\\\1', ' '.join(text.split()))
 
-
-def parse_json(raw):
-    raw = raw.strip()
-    if raw.startswith('```'):
-        raw = raw.split('\n', 1)[-1].rsplit('```', 1)[0].strip()
-    try:
-        return json.loads(raw)
-    except ValueError:
-        raise TaskError('Model output was not complete structured JSON.') from None
 
 
 def normalized(text):
@@ -166,8 +150,9 @@ def card_markdown(cards, messages, overview, account, language, complete):
     by_id = {message['id']: message for message in messages}
     facts = {fact['id']: (card, fact) for card in cards for fact in card['facts']}
     if complete or overview:
-        selected = set(overview)
-        ordered = sorted(cards, key=lambda card: not any(fact['id'] in selected for fact in card['facts']))
+        priority = {identifier: index for index, identifier in enumerate(overview)}
+        ordered = sorted(cards, key=lambda card: min((priority.get(fact['id'], len(priority))
+                                                     for fact in card['facts']), default=len(priority)))
         missing = sum(not card['facts'] for card in cards)
         lines.append((f"{len(cards)} mail · {missing} mailin özeti çıkarılamadı." if tr else
                       f"{len(cards)} emails · {missing} emails could not be summarized.") if missing else
@@ -265,11 +250,11 @@ def summarize(messages, question, params, render, generate, progress, stream,
         progress(completed, total, phase)
         return result
 
-    pieces = split_emails(messages, lambda items: extraction(items, retry=True)[1][1], limit, cap - 1)
+    pieces = split_emails(messages, lambda items: extraction(items, retry=True)[1][1], limit, cap)
     # Reserve enough output space for checked JSON as well as input space.
     width = max(1, min(5, params['max_output_tokens'] // 400))
     queue = [(group[i:i + width], True) for group in pieces for i in range(0, len(group), width)]
-    total = len(queue) + 1
+    total = len(queue)
     if total > cap:
         raise TaskError('Summary batches exceed Maximum tasks. Increase the budget or select fewer emails.')
     queue = [(batch, retry, steps.add('summary_extract', [item['source'] for item in batch]))
@@ -302,7 +287,7 @@ def summarize(messages, question, params, render, generate, progress, stream,
         if retry_empty and retry:
             middle = max(1, len(retry) // 2)
             groups = [retry[:middle], retry[middle:]] if issues and len(retry) > 1 else [retry]
-            if completed + len(queue) + len(groups) + 1 <= cap:
+            if completed + len(queue) + len(groups) <= cap:
                 before = queue[0][2] if queue else overview_step
                 queue[0:0] = [(part, False, steps.add('summary_retry', [item['source'] for item in part], before=before))
                               for part in groups]
@@ -310,7 +295,7 @@ def summarize(messages, question, params, render, generate, progress, stream,
                 diagnose('retry_split' if issues else 'retry_empty', [item['source'] for item in retry])
             else:
                 diagnose('retry_budget_exhausted', [item['source'] for item in retry])
-        if retry and (not retry_empty or not groups or completed + len(queue) + 1 > cap):
+        if retry and (not retry_empty or not groups or completed + len(queue) > cap):
             notify('warning', text='Some email findings could not be validated; inspect their original text.')
         for record in records:
             card = cards[record['id']]
@@ -322,45 +307,16 @@ def summarize(messages, question, params, render, generate, progress, stream,
                     card['facts'].append(fact | {'id': f'{card["source"]}.{len(card["facts"]) + 1}'})
         update()
 
-    candidates = [fact | {'source': card['source'], 'kind': card['kind'], **details(next(m for m in messages if m['id'] == card['id']), account)}
-                  for card in cards.values() for fact in card['facts']]
-    def overview_prompt(items, maximum=8):
-        return render(OVERVIEW, question + '\nMaximum: ' + str(maximum) + '\nFacts:\n' + json.dumps(items, ensure_ascii=False))
-    def select(items, maximum, identifier):
-        prompt, size = overview_prompt(items, maximum)
-        if size > limit:
-            raise TaskError('Overview exceeds Input tokens.')
-        steps.set(identifier, 'running')
-        data = parse_json(call(prompt, 'Selecting overview', min(512, params['max_output_tokens']),
-                               input_tokens=size, sources=[item['source'] for item in items]))
-        ids = data.get('facts') if isinstance(data, dict) else None
-        known = {item['id']: item for item in items}
-        if not isinstance(ids, list) or not ids or len(ids) > maximum or any(not isinstance(key, str) or key not in known for key in ids) or len(ids) != len(set(ids)):
-            raise TaskError('Invalid overview references.')
-        steps.set(identifier, 'done')
-        return [known[key] for key in ids]
-    try:
-        while candidates and overview_prompt(candidates)[1] > limit:
-            groups = pack(candidates, lambda items: overview_prompt(items, 4)[1], limit)
-            if len(groups) >= len(candidates):
-                raise TaskError('Overview cannot shrink within the input budget.')
-            total += len(groups)
-            identifiers = [steps.add('overview_reduce', [item['source'] for item in group], before=overview_step) for group in groups]
-            candidates = [item for group, identifier in zip(groups, identifiers)
-                          for item in select(group, min(4, max(1, len(group) // 2)), identifier)]
-        if candidates:
-            overview = [item['id'] for item in select(candidates, min(8, len(candidates)), overview_step) ]
-    except TaskError:
-        for identifier, row in steps.rows.items():
-            if row['state'] == 'running':
-                steps.set(identifier, 'failed', 'overview_fallback')
-        if steps.rows[overview_step]['state'] == 'pending':
-            steps.set(overview_step, 'skipped')
-        diagnose('overview_fallback', stage='overview')
-        overview = [item['id'] for item in candidates[:8]]
-        notify('warning', text='Overview ordering was unavailable; showing validated findings in source order.')
-    if not candidates:
-        steps.set(overview_step, 'skipped')
+    # The overview only orders existing facts: no generation, rewriting, or schema failure.
+    steps.set(overview_step, 'running')
+    kinds = {'action_requested': 0, 'reply_requested': 1, 'information': 2, 'unclear': 3}
+    roles = {'to': 0, 'cc': 1, 'other': 2, 'sent': 3}
+    by_id = {message['id']: message for message in messages}
+    ordered = sorted(cards.values(), key=lambda card: (
+        kinds[card['kind']], roles[details(by_id[card['id']], account)['role']], card['source']))
+    overview = [fact['id'] for card in ordered for fact in card['facts']]
+    steps.set(overview_step, 'done')
+    diagnose('overview_local', stage='overview')
     total = completed
     progress(completed, total, 'Complete')
     update(complete=True)
