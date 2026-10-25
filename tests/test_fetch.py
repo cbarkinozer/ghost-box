@@ -93,6 +93,9 @@ class FetchTests(unittest.TestCase):
             self.assertEqual(len(mail_store.messages(mailbox, "other@example.com")), 1)
             self.assertIsNone(mail_store.message(mailbox, "me@example.com", "old"))
             self.assertEqual(mail_store.message(mailbox, "me@example.com", "start")["body"], "A private message.")
+            coverage=mailbox.coverage['me@example.com'].copy()
+            self.assertEqual(coverage['first'],first);self.assertEqual(coverage['last'],last)
+            self.assertEqual(coverage['count'],1);self.assertTrue(coverage['exclude_promotions'])
             session.get.reset_mock()
             result = gmail.fetch(first, last, mailbox, "me@example.com", Mock(), lambda: True)
             self.assertTrue(result["cancelled"])
@@ -117,9 +120,13 @@ class FetchTests(unittest.TestCase):
                 gmail.fetch(first, last, mailbox, "me@example.com", Mock(), lambda: False)
             self.assertIsNotNone(mail_store.message(mailbox, "me@example.com", "start"))
 
+            self.assertEqual(mailbox.coverage['me@example.com'],coverage)
+
             # A complete empty result is a successful replacement with no messages.
             session.get.side_effect = [response({})]
             gmail.fetch(first, last, mailbox, "me@example.com", Mock(), lambda: False, exclude_promotions=False)
+            self.assertFalse(mailbox.coverage["me@example.com"]["exclude_promotions"])
+            self.assertEqual(mailbox.coverage["me@example.com"]["count"],0)
             self.assertNotIn("-category:promotions", session.get.call_args.kwargs["params"]["q"])
             self.assertEqual(len(mail_store.messages(mailbox, "me@example.com")), 0)
             self.assertEqual(len(mail_store.messages(mailbox, "other@example.com")), 1)

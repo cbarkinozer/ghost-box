@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
     QAbstractItemView, QHBoxLayout, QVBoxLayout, QWidget,
     QProgressBar,
     QComboBox,
-    QCheckBox, QTabWidget,
+    QCheckBox, QTabWidget, QLineEdit,
 )
 
 from ..mail import gmail
@@ -34,7 +34,9 @@ from .diagnostics import DiagnosticsDialog
 from .work_steps import WorkSteps
 from ..mail.diagnostics import safe_record
 from ..mail.metadata import details
+from ..mail.search import matches
 from ..models.session import ModelSession
+from ..models import download as model_download
 
 
 def configure_fonts(app):
@@ -68,6 +70,7 @@ class Window(QMainWindow):
         self.runtime = ModelSession(self)
         self.answer_markdown = ''
         self.answer_description = ''
+        self.answer_coverage = ''
         self.request_count = 0
         self.answer_question = ''
         self.answer_is_summary = False
@@ -78,6 +81,9 @@ class Window(QMainWindow):
         self.answer_truncated = False
         self.preferences = QSettings('Ghost-box', 'Ghost-box')
         self.email = ""
+        self.fetch_state = 'idle'
+        self.answer_coverage = ''
+        self.pending_preset_removal = None
         self.mailbox = mail_store.MailStore()
         # Remove mail files created by earlier versions before showing any mail.
         old_database = Path(QStandardPaths.writableLocation(
@@ -149,13 +155,40 @@ class Window(QMainWindow):
         mail_layout.addWidget(QLabel("<b>Emails</b>"))
         selection_buttons = QHBoxLayout()
         select_all = QPushButton("Select all")
-        select_all.clicked.connect(self.mail_list.selectAll)
+        select_all.clicked.connect(self.select_visible)
         selection_buttons.addWidget(select_all)
         clear_selection = QPushButton("Clear selection")
         clear_selection.clicked.connect(self.mail_list.clearSelection)
         selection_buttons.addWidget(clear_selection)
         mail_layout.addLayout(selection_buttons)
+        search_row = QHBoxLayout()
+        self.mail_search = QLineEdit()
+        self.mail_search.setPlaceholderText('Search mail…')
+        self.mail_search.setClearButtonEnabled(True)
+        self.mail_search.setToolTip('Literal text search in RAM; no model needed. Select all includes only visible matches.')
+        self.search_field = QComboBox()
+        for label, field in (('All text', 'all'), ('Sender', 'sender'), ('Subject', 'subject'), ('Body', 'body')):
+            self.search_field.addItem(label, field)
+        self.mail_search.textChanged.connect(self.filter_messages)
+        self.search_field.currentIndexChanged.connect(self.filter_messages)
+        search_row.addWidget(self.mail_search, 1)
+        search_row.addWidget(self.search_field)
+        mail_layout.addLayout(search_row)
+        self.coverage_label = QLabel('No successful fetch this session.')
+        self.coverage_label.setWordWrap(True)
+        self.coverage_label.setTextFormat(Qt.TextFormat.PlainText)
+        mail_layout.addWidget(self.coverage_label)
         mail_layout.addWidget(self.mail_list)
+        cleanup_row = QHBoxLayout()
+        self.delete_mail_button = QPushButton('Delete local')
+        self.delete_mail_button.setToolTip('Remove selected mail from RAM and clear dependent conversations. Never deletes from Gmail. A later Fetch may retrieve it again.')
+        self.delete_mail_button.clicked.connect(self.delete_selected_mail)
+        cleanup_row.addWidget(self.delete_mail_button)
+        self.clear_mail_button = QPushButton('Clear all mail')
+        self.clear_mail_button.setToolTip('Clear all fetched mail, conversations, retained snapshots and fetch coverage from RAM. Keep account and models.')
+        self.clear_mail_button.clicked.connect(self.clear_all_mail)
+        cleanup_row.addWidget(self.clear_mail_button)
+        mail_layout.addLayout(cleanup_row)
         self.reader = QPlainTextEdit()
         reading_font = QFont(QApplication.font())
         reading_font.setPointSizeF(max(14, QFontInfo(reading_font).pointSizeF()))
@@ -291,6 +324,7 @@ class Window(QMainWindow):
         self.caspy.parameters_changed.connect(self.scope_changed)
         self.caspy.load_button.clicked.connect(self.load_model)
         self.caspy.unload_button.clicked.connect(lambda: self.runtime.unload())
+        self.caspy.remove_requested.connect(self.remove_preset)
         self.runtime.event.connect(self.inference_event)
         self.runtime.state_changed.connect(self.model_state_changed)
         content.addWidget(self.caspy)
@@ -324,25 +358,28 @@ class Window(QMainWindow):
         self.update_scope()
 
     def selected_messages(self):
-        selected = {item.data(Qt.ItemDataRole.UserRole) for item in self.mail_list.selectedItems()}
+        selected = {item.data(Qt.ItemDataRole.UserRole) for item in self.mail_list.selectedItems() if not item.isHidden()}
         return [message for message in mail_store.messages(self.mailbox, self.email)
                 if message["id"] in selected]
 
     def update_scope(self):
         messages = self.selected_messages()
+        files_ready = self.caspy.task is None and self.pending_preset_removal is None
         characters = len(SYSTEM) + len(build_context(messages, self.question_text())) if messages else 0
         self.scope_label.setText(
             f"{len(messages)} emails selected · {characters:,} input characters · ~{math.ceil(characters / 4):,} tokens"
         )
         self.ask_button.setEnabled(bool(messages and self.question.toPlainText().strip())
-                                   and self.task is None and not self.answer_running and not self.runtime.busy and self.runtime.state != 'unloading')
-        self.summary_button.setEnabled(bool(messages) and self.task is None and not self.answer_running and not self.runtime.busy and self.runtime.state != 'unloading')
+                                   and self.task is None and not self.answer_running and not self.runtime.busy and self.runtime.state != 'unloading' and files_ready)
+        self.summary_button.setEnabled(bool(messages) and self.task is None and not self.answer_running and not self.runtime.busy and self.runtime.state != 'unloading' and files_ready)
         self.followup_button.setEnabled(bool(self.answer_markdown and self.answer.sources)
-                                        and self.task is None and not self.answer_running and not self.runtime.busy and self.runtime.state != 'unloading')
+                                        and self.task is None and not self.answer_running and not self.runtime.busy and self.runtime.state != 'unloading' and files_ready)
         for button in self.preview_actions:
             button.setEnabled(bool(self.mail_list.currentItem() and self.email) and self.task is None)
         for control in (self.session_picker, self.message_picker, self.clear_sessions):
             control.setEnabled(not self.answer_running and not self.runtime.busy and self.task is None)
+        self.delete_mail_button.setEnabled(bool(messages) and self.task is None)
+        self.clear_mail_button.setEnabled(bool(self.mailbox.accounts or self.history.sessions or self.mailbox.coverage) and self.task is None)
         self.update_model_buttons()
         if self.answer_description:
             changed = {message['id'] for message in messages} != set(self.answer.sources)
@@ -350,7 +387,98 @@ class Window(QMainWindow):
             calls += f' · {self.answer_elapsed:.1f} s' if self.answer_elapsed else ''
             calls += ' · partial' if self.answer_truncated else ''
             self.answer_scope.setText(self.answer_description + calls + (' · selection changed' if changed else ''))
-            self.answer_scope.setToolTip('This answer keeps its original email snapshot. The current selection is used only for the next request.')
+            self.answer_scope.setToolTip('This answer keeps its original source snapshot. Current selection applies to the next request.\n' + self.answer_coverage)
+
+    def select_visible(self):
+        self.mail_list.clearSelection()
+        for row in range(self.mail_list.count()):
+            item = self.mail_list.item(row)
+            if not item.isHidden():
+                item.setSelected(True)
+
+    def filter_messages(self, *_):
+        query = self.mail_search.text().strip()
+        for row in range(self.mail_list.count()):
+            item = self.mail_list.item(row)
+            message = mail_store.message(self.mailbox, self.email, item.data(Qt.ItemDataRole.UserRole))
+            visible = bool(message and matches(message, query, self.search_field.currentData()))
+            if not visible:
+                item.setSelected(False)
+            item.setHidden(not visible)
+        current = self.mail_list.currentItem()
+        if current is not None and current.isHidden():
+            self.mail_list.setCurrentItem(None, QItemSelectionModel.SelectionFlag.NoUpdate)
+            self.reader.clear()
+        self.refresh_coverage()
+        self.update_scope()
+
+    def coverage_description(self):
+        coverage = self.mailbox.coverage.get(self.email)
+        if not coverage:
+            return 'No successful fetch recorded this session.'
+        return (f"Fetched local range: {coverage['first']:%Y-%m-%d %H:%M} to {coverage['last']:%Y-%m-%d %H:%M} (full end minute). "
+                f"{coverage['count']} emails fetched at {coverage['completed_at']:%Y-%m-%d %H:%M}; "
+                f"{len(mail_store.messages(self.mailbox, self.email))} currently retained locally. "
+                + ('Promotions excluded. ' if coverage['exclude_promotions'] else 'Promotions included. ')
+                + 'Sent included; Spam, Trash and Drafts excluded. This is not the whole Gmail mailbox.')
+
+    def refresh_coverage(self):
+        total = self.mail_list.count()
+        shown = sum(not self.mail_list.item(i).isHidden() for i in range(total))
+        coverage = self.mailbox.coverage.get(self.email)
+        text = f'{shown}/{total} emails shown'
+        if coverage:
+            first, last = coverage['first'], coverage['last']
+            end = last.strftime('%H:%M' if first.date() == last.date() else '%m-%d %H:%M')
+            text += f"\nFetched {first:%m-%d %H:%M} – {end}"
+            removed = coverage['count'] - total
+            if removed > 0:
+                text += f'\n{removed} locally removed since fetch'
+            text += f"\n{'Promotions skipped' if coverage['exclude_promotions'] else 'Promotions included'} · {coverage['completed_at']:%H:%M}"
+        else:
+            text += '\nNo successful fetch this session.'
+        if self.fetch_state in ('fetching', 'cancelled', 'failed'):
+            text += '\n' + {'fetching': 'Fetch in progress…', 'cancelled': 'Last fetch cancelled; previous mail kept.',
+                              'failed': 'Last fetch failed; previous mail kept.'}[self.fetch_state]
+        self.coverage_label.setText(text)
+        self.coverage_label.setToolTip(self.coverage_description())
+
+    def delete_selected_mail(self):
+        if self.task is not None:
+            return
+        identifiers = {message['id'] for message in self.selected_messages()}
+        if not identifiers:
+            return
+        self.save_history_message()
+        previous = self.history.current
+        affected = bool(identifiers.intersection(self.answer.sources))
+        if affected and self.answer_running:
+            # Ignore late queued worker events before terminating its process.
+            self.answer_running = False
+            self.stop_button.setEnabled(False)
+            self.runtime.unload('Source mail removed')
+        self.mailbox.remove(self.email, identifiers)
+        self.history.remove_sources(identifiers)
+        if previous is not self.history.current or affected:
+            self.invalidate_answer()
+            if self.history.current is not None:
+                self.display_history_message()
+        self.refresh_history_controls()
+        self.refresh_messages()
+        if not self.answer_running:
+            self.inference_status.setText('Selected local mail and dependent conversations removed.')
+        self.statusBar().showMessage(f'Removed {len(identifiers)} local email(s) and dependent conversations. Gmail unchanged; Fetch can retrieve them again.')
+
+    def clear_all_mail(self):
+        if self.task is not None:
+            return
+        self.clear_history(force=True)
+        self.mailbox.clear()
+        self.fetch_state = 'idle'
+        self.question.clear()
+        self.mail_search.clear()
+        self.refresh_messages()
+        self.set_inference_status('Mail, conversations and retained snapshots cleared from RAM. Account and models kept.')
 
     def question_text(self):
         text = self.question.toPlainText().strip()
@@ -403,6 +531,7 @@ class Window(QMainWindow):
         self.answer.clear()
         self.answer_markdown = ''
         self.answer_description = ''
+        self.answer_coverage = ''
         self.request_count = 0
         self.answer_question = ''
         self.answer_is_summary = False
@@ -426,7 +555,7 @@ class Window(QMainWindow):
                 truncated=self.answer_truncated, requests=self.request_count,
                 sources=dict(self.answer.sources), diagnostics=list(self.diagnostic_rows),
                 steps=[dict(row) for row in self.work_steps.rows], steps_language=self.work_steps.language, steps_error=self.work_steps.error_text,
-                search_status=self.search_status.text())
+                search_status=self.search_status.text(), coverage=self.answer_coverage)
 
     def refresh_history_controls(self):
         self.session_picker.blockSignals(True)
@@ -449,6 +578,7 @@ class Window(QMainWindow):
             return
         self.answer_markdown = record['markdown']
         self.answer_description = record['description']
+        self.answer_coverage = record.get('coverage', '')
         self.answer_question = record['question']
         self.answer_is_summary = record['summary']
         self.summary_cards = record['cards']
@@ -535,6 +665,9 @@ class Window(QMainWindow):
         dialog.deleteLater()
 
     def model_configuration(self):
+        if self.caspy.task is not None or self.pending_preset_removal is not None:
+            self.set_inference_status('Wait for the model file operation to finish.')
+            return None
         folder = self.caspy.selected_folder()
         if folder is None:
             self.set_inference_status('Select a downloaded preset or a local model first.')
@@ -560,14 +693,36 @@ class Window(QMainWindow):
         except ValueError:
             params = None
         matches = self.runtime.matches(folder, params)
+        preset = self.caspy.selector.currentData()
+        self.caspy.remove_button.setEnabled(preset in model_download.PRESETS
+            and self.caspy.preset_folder(preset).exists() and self.caspy.task is None
+            and self.pending_preset_removal is None and not self.answer_running and not self.runtime.busy
+            and self.runtime.state not in ('loading', 'unloading'))
         self.caspy.load_button.setText('Loaded' if matches and self.runtime.state == 'ready' else
                                        'Reload' if self.runtime.process is not None else 'Load')
-        self.caspy.load_button.setEnabled(folder is not None and not self.answer_running
+        self.caspy.load_button.setEnabled(folder is not None and self.caspy.task is None
+                                         and self.pending_preset_removal is None and not self.answer_running
                                          and not self.runtime.busy
                                          and self.runtime.state not in ('loading', 'unloading')
                                          and not (matches and self.runtime.state == 'ready'))
         self.caspy.unload_button.setEnabled(self.runtime.process is not None
                                            and not self.answer_running and not self.runtime.busy and self.runtime.state != 'unloading')
+
+    def remove_preset(self):
+        preset = self.caspy.selector.currentData()
+        if (preset not in model_download.PRESETS or self.caspy.task is not None or self.runtime.busy
+                or self.answer_running or self.pending_preset_removal is not None
+                or self.runtime.state in ('loading', 'unloading')):
+            return
+        folder = self.caspy.preset_folder(preset)
+        if QMessageBox.question(self, 'Remove downloaded preset',
+                f'Remove this application-managed preset?\n{folder}\n\nAccount, emails and custom model paths will be kept. The preset can be downloaded again.',
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Cancel) != QMessageBox.StandardButton.Yes:
+            return
+        self.pending_preset_removal = preset
+        self.caspy.lock_files()
+        self.runtime.unload('Removing downloaded preset')
 
     def load_model(self):
         configuration = self.model_configuration()
@@ -580,6 +735,9 @@ class Window(QMainWindow):
 
     def model_state_changed(self, *_):
         state = self.runtime.state
+        if state == 'unloaded' and self.runtime.process is None and self.pending_preset_removal is not None:
+            preset, self.pending_preset_removal = self.pending_preset_removal, None
+            self.caspy.remove_downloaded(preset)
         folder = self.runtime.folder
         name = ('Qwen3.5 4B · MLX' if folder == self.caspy.model_folder else
                'Qwen3.5 4B · GGUF' if folder and folder.parent == self.caspy.gguf_folder else folder.name if folder else '')
@@ -598,7 +756,8 @@ class Window(QMainWindow):
         self.update_scope()
 
     def ask_selected(self, summarize=False, follow_up=False):
-        if self.answer_running or self.runtime.busy or self.task is not None or self.runtime.state == 'unloading':
+        if (self.answer_running or self.runtime.busy or self.task is not None or self.runtime.state == 'unloading'
+                or self.caspy.task is not None or self.pending_preset_removal is not None):
             return
         self.summary_mode = summarize
         if follow_up and not self.question.toPlainText().strip():
@@ -626,6 +785,7 @@ class Window(QMainWindow):
             previous = {'request': self.answer_question, 'answer': previous_answer,
                         'partial': self.answer_truncated}
         self.save_history_message()
+        self.answer_coverage = self.answer_coverage if follow_up else self.coverage_description()
         self.answer_question = self.question.toPlainText().strip() or SUMMARY
         self.answer_is_summary = summarize
         self.summary_cards = []
@@ -747,6 +907,8 @@ class Window(QMainWindow):
         if email != self.email:
             self.clear_history(force=True)
             self.mailbox.clear()
+            self.fetch_state = 'idle'
+            self.mail_search.clear()
             self.question.clear()
         self.email = email
         self.statusBar().showMessage(
@@ -765,7 +927,7 @@ class Window(QMainWindow):
                 item = QListWidgetItem(f"{date} · {message['sender']}\n{message['subject']}")
                 item.setData(Qt.ItemDataRole.UserRole, message["id"])
                 self.mail_list.addItem(item)
-        self.update_scope()
+        self.filter_messages()
 
     def read_message(self, item):
         for button in self.preview_actions:
@@ -789,6 +951,8 @@ class Window(QMainWindow):
         if first > last:
             QMessageBox.warning(self, "Date range", "From must be on or before To.")
             return
+        self.fetch_state = 'fetching'
+        self.refresh_coverage()
         account = self.email
         exclude_promotions = self.skip_promotions.isChecked()
         self.start(lambda: gmail.fetch(
@@ -800,6 +964,7 @@ class Window(QMainWindow):
         self.statusBar().showMessage("Fetching selected local times; previous emails will be replaced on success…")
 
     def fetched(self, result):
+        self.fetch_state = 'cancelled' if result['cancelled'] else 'complete'
         self.refresh_messages()
         state = "Fetch cancelled; previous emails kept" if result["cancelled"] else "Fetch complete; previous session emails replaced"
         self.statusBar().showMessage(
@@ -807,6 +972,8 @@ class Window(QMainWindow):
         )
 
     def show_error(self, message):
+        if self.fetch_state == 'fetching':
+            self.fetch_state = 'failed'
         self.refresh_messages()
         self.statusBar().showMessage(message)
         QMessageBox.warning(self, "Gmail", message)
@@ -824,10 +991,15 @@ class Window(QMainWindow):
         self.update_scope()
 
     def closeEvent(self, event):
+        if self.pending_preset_removal is not None:
+            self.pending_preset_removal = None
+            for control in (self.caspy.selector, self.caspy.choose, self.caspy.choose_gguf):
+                control.setEnabled(True)
+            self.caspy.update_status()
         self.runtime.unload('Window closing')
         if self.caspy.task is not None:
             self.caspy.task.requestInterruption()
-            self.statusBar().showMessage("Stopping model download. Close again when finished.")
+            self.statusBar().showMessage("Waiting for model file operations to stop. Close again when finished.")
             event.ignore()
             return
         if self.task is not None:
@@ -841,6 +1013,8 @@ class Window(QMainWindow):
             self.mailbox.clear()
             self.mail_list.clear()
             self.reader.clear()
+            self.mail_search.clear()
+            self.fetch_state = 'idle'
             self.question.clear()
             self.invalidate_answer()
             event.accept()

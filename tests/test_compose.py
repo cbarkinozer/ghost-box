@@ -39,12 +39,28 @@ class ComposeTests(unittest.TestCase):
                 dialog=ComposeDialog(source,'me@example.com','reply',owner);self.drain(dialog)
                 self.assertTrue(dialog.allowed)
                 owner.language.setCurrentIndex(0)
+                dialog.body.setPlainText('PRIVATE original draft — onay henüz yok.')
                 dialog.instructions.setPlainText('Bütçeyi onayladığımı söyle.')
                 with (patch.object(owner,'model_configuration',return_value=(Path(directory),owner.caspy.parameters())),
                       patch.object(owner.runtime,'load') as load):
                     dialog.generate()
                 self.assertEqual(load.call_args.kwargs['request']['language'],'Turkish')
+                self.assertFalse(dialog.undo_button.isEnabled())
+                dialog.model_event(dict(kind='text',text='Generated proposal.'))
                 dialog.model_event(dict(kind='done',status='success'))
+                self.assertTrue(dialog.undo_button.isEnabled())
+                dialog.undo_rewrite()
+                self.assertEqual(dialog.body.toPlainText(),'PRIVATE original draft — onay henüz yok.')
+                self.assertIsNone(dialog.previous_body)
+                send.assert_not_called()
+                with (patch.object(owner,'model_configuration',return_value=(Path(directory),owner.caspy.parameters())),
+                      patch.object(owner.runtime,'load')):
+                    dialog.generate()
+                dialog.model_event(dict(kind='text',text='Interrupted partial draft'))
+                dialog.model_event(dict(kind='done',status='error'))
+                dialog.undo_rewrite()
+                self.assertEqual(dialog.body.toPlainText(),'PRIVATE original draft — onay henüz yok.')
+                send.assert_not_called()
                 dialog.body.setPlainText('Bütçe uygundur. Devam edebilirsiniz.')
                 send.assert_not_called()
                 with patch.object(QMessageBox,'exec',return_value=QMessageBox.StandardButton.Cancel):dialog.review_send()

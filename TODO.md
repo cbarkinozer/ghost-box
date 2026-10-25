@@ -1,6 +1,6 @@
 # Ghost-box implementation checklist
 
-Build a small desktop application in reviewable steps. This is a plan, not a list of implemented features. Start with a mostly empty window, then make Gmail usable before adding inference.
+Build a small desktop application in reviewable steps. Checked items are implemented or backed by the specific validation stated; unchecked items remain pending. Implementation checks do not replace the model-quality benchmark or device-specific release validation. Mixed implementation/release tasks are split below.
 
 ## Email retention
 
@@ -8,23 +8,25 @@ Build a small desktop application in reviewable steps. This is a plan, not a lis
 - [x] Clear session mail on disconnect, account change, and application exit.
 - [x] Remove legacy email database files at startup; never load them.
 - [x] Keep summaries, conversations, and BM25 working data in RAM.
-- [ ] Track RAM-only fetch coverage.
+- [x] Track successful fetch coverage in RAM; retain it on cancelled/failed attempts and clear it with all local mail.
 
 ## Working rules
 
-- [ ] Keep each increment small, runnable, and easy to read; explain changed files and how to run it.
-- [ ] Use Python and PySide6 Qt Widgets. Keep email content, metadata, and derived results in RAM only. No web frontend or HTTP application server.
-- [ ] Add dependencies only when their benefit outweighs their code and packaging cost; record why each is needed.
-- [ ] Prefer direct functions and small modules. Avoid agent frameworks, repositories/services layers, plugin systems, and speculative abstractions.
-- [ ] Keep long-running work off the UI thread. Add only tests that validate meaningful behavior.
-- [ ] Keep credentials, messages, downloaded weights, and evaluation results containing private data out of Git.
+Ongoing constraints: checked means the current implementation follows the rule; keep applying it to future changes.
+
+- [x] Keep each increment small, runnable, and easy to read; explain changed files and how to run it.
+- [x] Use Python and PySide6 Qt Widgets. Keep email content, metadata, and derived results in RAM only. No web frontend or HTTP application server.
+- [x] Add dependencies only when their benefit outweighs their code and packaging cost; record why each is needed.
+- [x] Prefer direct functions and small modules. Avoid agent frameworks, repositories/services layers, plugin systems, and speculative abstractions.
+- [x] Keep long-running work off the UI thread. Add only tests that validate meaningful behavior.
+- [x] Keep credentials, messages, downloaded weights, and evaluation results containing private data out of Git.
 
 ## 1. Mostly empty desktop application
 
 - [x] Add minimal project metadata and one documented launch command.
 - [x] Open a single window titled **Ghost-box** with a simple empty state.
-- [ ] Reserve a small toolbar for account, date range, Fetch, and settings; add controls as they become functional.
-- [ ] Keep the initial layout plain: mail list and content area. Add the question field when inference works.
+- [x] Reserve a small toolbar for account, date range, Fetch, and settings; add controls as they become functional.
+- [x] Keep the initial layout plain: mail list and content area. Add the question field when inference works.
 - [x] Confirm clean startup and shutdown without loading model libraries or starting background services (macOS native-window smoke check).
 
 **Done when:** the user can launch and inspect a mostly empty native window. No Gmail or model implementation in this increment.
@@ -34,19 +36,20 @@ Build a small desktop application in reviewable steps. This is a plan, not a lis
 - [x] Document Google Cloud desktop OAuth client setup and the required local configuration file.
 - [x] Add **Connect Gmail**, account identity, and **Disconnect**.
 - [x] Load the application's OAuth configuration automatically; end users only click Connect and sign in with Google.
-- [ ] Maintainer: register Ghost-box's Google OAuth client and include `oauth-client.json` in configured builds. Verify live sign-in.
+- [x] Register the Google Desktop OAuth client and verify live Gmail sign-in with the local configuration (confirmed by the user).
+- [ ] Include the OAuth configuration in configured distributable builds and verify sign-in on a fresh device; keep it out of Git.
 - [x] Use the system browser and read-only Gmail OAuth; never ask for a Gmail password.
 - [x] Store tokens in the OS credential store. Explain the chosen OAuth and credential-storage dependencies.
-- [ ] Handle cancelled login, expired/revoked credentials, and connection errors visibly.
+- [x] Handle cancelled login, expired/revoked credentials, and connection errors visibly.
 - [x] Disconnect by removing local credentials and clearing session mail.
 
-Live Google sign-in was confirmed by the user. Startup reads saved identity locally. Fetch now refreshes expired tokens and reports revoked access; fetching still needs the first live mailbox check.
+Live Google sign-in and mailbox fetching were confirmed by the user. Startup reads saved identity locally. Fetch refreshes expired tokens and reports revoked access; safe account/fetch errors are implemented and tested with mocks. Fresh-device and broader live error-path checks remain release work.
 
 **Done when:** connecting and disconnecting work without downloading messages or starting a model.
 
 ## 3. Fetch a date range
 
-Date/time controls default to **today 00:00–23:59**, including the entire end minute. Each successful fetch atomically replaces the connected account's previous local emails; failure or cancellation keeps them. Fetch/cancellation status is shown in the UI; session-only fetch coverage is still pending; nothing is restored on launch.
+Date/time controls default to **today 00:00–23:59**, including the entire end minute. Each successful fetch atomically replaces the connected account's previous local emails; failure or cancellation keeps them. Fetch coverage shows the actual successful date/time range, category exclusions, completion time and retained counts. Failed/cancelled attempts keep the previous coverage; editing controls does not rewrite it. Nothing is restored on launch.
 
 - [x] Add **From**, **To**, and **Fetch**. Reject reversed or invalid ranges.
 - [x] Include editable hours/minutes in local time; the To minute is inclusive, converted to an exclusive next-minute bound.
@@ -56,19 +59,20 @@ Date/time controls default to **today 00:00–23:59**, including the entire end 
 - [x] Store Gmail message/thread IDs, sender, recipients, subject, timestamp, and readable body in session memory only.
 - [x] Handle plain-text and HTML-only messages without rendering active HTML or fetching remote assets. Defer attachments.
 - [x] Replace previous local messages in one in-memory replacement after a successful fetch; avoid duplicates and preserve old messages on failure/cancellation.
-- [ ] Keep successful fetch coverage and partial/cancelled status in memory only; no scheduled synchronization.
+- [x] Keep successful fetch coverage and last-attempt cancelled/failed/in-progress status in RAM; no scheduled synchronization. Answers retain their original coverage snapshot.
 
 **Done when:** a selected range produces browsable local messages, a second fetch creates no duplicates, and boundary dates behave as displayed.
 
 ## 4. Browse, search, and clear local data
 
 - [x] Show a simple sender/subject/date list and readable selected message; group conversations only as needed for summaries.
-- [ ] Add local keyword/exact-text search and sender, subject, and date filters using in-memory matching; no disk index.
-- [ ] Add **Delete local copy** for selected messages. Remove associated index entries and derived results; never delete from Gmail.
-- [ ] Explain that a later Fetch can download deleted local messages again; no suppression-list feature initially.
-- [ ] Add **Clear cache** for derived summaries/results while keeping downloaded messages, account, and models.
-- [ ] Add a separate **Remove all downloaded mail** action that also clears associated derived data.
-- [ ] Cancel or invalidate in-flight work when its source data is deleted so stale output cannot repopulate the cache.
+- [x] Add instant case-insensitive literal search over fetched mail, with All text / Sender / Subject / Body scopes and visible-only Select all; no model or disk index.
+- [ ] Add a local date filter if needed; the existing From/To controls limit fetching, not the already-fetched inbox view.
+- [x] Add **Delete local** for selected visible messages; remove their RAM copies and entire dependent conversations/snapshots. Keep unrelated sessions and never delete from Gmail.
+- [x] Explain local-only deletion and later re-fetching in the control tooltip and completion status; no suppression list.
+- [x] Add **Clear sessions** to remove RAM-only conversations, summaries, answers, diagnostics, work steps, and retained source snapshots while keeping the fetched inbox, account, and models. There is no disk mail/result cache.
+- [x] Add **Clear all mail** to clear the inbox, conversations, retained source snapshots, search/question input and coverage from RAM while keeping account/models.
+- [x] Stop source-dependent inference before deletion, ignore late output, and remove dependent sessions. Disable cleanup during account/fetch operations to avoid a replacement-fetch race.
 
 **Done when:** search works without a loaded model, deleted mail disappears from retrieval, and cleanup actions have distinct, clear effects.
 
@@ -85,9 +89,11 @@ Initial preset: [mlx-community/Qwen3.5-4B-MLX-4bit](https://huggingface.co/mlx-c
 - [x] Download the preset to one documented application model directory; pin the revision and validate required artifacts.
 - [x] Show progress, cancellation, retry, and readable disk/network errors. Never treat a partial download as ready.
 - [x] Reuse complete downloaded files and avoid duplicate application/Hub caches where practical.
-- [ ] Support a custom MLX directory first; validate compatibility and report unsupported models clearly.
-- [ ] Keep downloaded weights separate from mail and derived cache. Offer explicit **Remove downloaded model** without deleting user-owned custom directories.
-- [ ] Require explicit selection before using a model; do not download on launch or fall back to a remote service.
+- [x] Select a custom MLX directory or GGUF file, check its path/platform/runtime, and surface load errors without blocking the UI.
+- [ ] Broaden custom-model compatibility validation and provide more specific unsupported-model diagnostics beyond the current load-error reporting.
+- [x] Keep model weights and numeric settings separate from RAM-only mail and derived results.
+- [x] Offer confirmed **Remove preset…** for built-in app-managed files, after unloading the worker. Refuse custom selections, links/reparse points, unknown files and foreign completion records; keep numeric profiles.
+- [x] Require explicit selection before using a model; do not download on launch or fall back to a remote service.
 
 **Done when:** a user can download/select the preset or select a compatible local directory, restart the application, and retain that selection.
 
@@ -98,7 +104,7 @@ Initial preset: [mlx-community/Qwen3.5-4B-MLX-4bit](https://huggingface.co/mlx-c
 - [x] Add manual Load/Unload and five-minute warm-model idle timeout; pause the timer during generation.
 - [x] Unload before model/settings reload and stop the worker on exit; retain only one model.
 - [x] Add collapsed inference controls with per-model numeric profiles in local JSON and reviewed preset defaults.
-- [ ] Add reset-to-default controls if needed; the warm-worker idle timeout is currently fixed at five minutes.
+- [x] Add **Reset model defaults** to restore/save shipped defaults for the selected model while preserving other profiles; the warm-worker idle timeout remains fixed at five minutes.
 - [x] Validate sampling parameters, input/output budgets, and task caps in both UI and worker.
 - [x] Check offline MLX/GGUF warm reuse and request-cache clearing on macOS with synthetic messages.
 - [x] Show explicit loaded/unloaded state, worker peak RAM, and MLX allocator memory; distinguish historical measurements.
@@ -141,6 +147,7 @@ Initial preset: [mlx-community/Qwen3.5-4B-MLX-4bit](https://huggingface.co/mlx-c
 - [x] Test that diagnostic events/reports exclude mail content, identifiers, prompts and raw model output; preserve diagnostics across message navigation and clear with sessions.
 - [x] Show real recipient role/counts, CC, timestamp, and attachment count separately from model-estimated mail type.
 - [x] Add source-bound Reply / Reply all / Forward with editable RAM-only drafts.
+- [x] Add one-level **Undo Caspy rewrite**, preserving the exact pre-generation text in RAM, including failed/interrupted rewrites; disable undo while generating/sending and clear the backup on dialog close.
 - [x] Add opt-in Gmail send permission, recipient/body confirmation, threaded replies, and no ambiguous automatic retry.
 - [ ] Verify live Gmail send authorization/delivery manually; automated checks use mocks only.
 - [ ] Add attachment forwarding and voice input in later increments.
@@ -149,9 +156,10 @@ Initial preset: [mlx-community/Qwen3.5-4B-MLX-4bit](https://huggingface.co/mlx-c
 - [ ] Summarize a conversation chronologically, limiting repeated quoted content and respecting the input budget.
 - [ ] Translate natural-language search into a small validated structure: sender/name, recipient, subject, date range, and terms.
 - [ ] Display interpreted filters so the user can inspect or correct them. Ask for clarification when names or dates are ambiguous.
-- [ ] Execute parameterized local queries in application code; the model never executes SQL or shell commands; application code validates and runs only allowed read-only mail lookups.
-- [ ] Answer questions from retrieved mail with source references and an explicit no-evidence response when appropriate.
-- [ ] Show local search coverage; do not imply the entire Gmail mailbox was searched.
+- [x] Run validated BM25 queries and ID-scoped mail lookups in application code; never execute model-supplied SQL, shell commands, or arbitrary tools. Natural-language metadata filtering remains pending above.
+- [x] Answer from retrieved mail excerpts with source-link rendering and explicit no-evidence instructions. Verify factual accuracy and correct refusal behavior through the pending evaluation set.
+- [x] Show selected source scope, BM25 query/match counts, and explicit search use/non-use for the current request; retain that status in RAM-only message history.
+- [x] Show fetched date-range coverage, exclusions and completion time in the inbox, and retain original answer coverage in its header tooltip; explicitly limit scope to fetched/selected mail.
 
 **Done when:** the evaluation cases below can be reviewed against exact source messages. No agent loop or embeddings.
 
@@ -174,8 +182,10 @@ Start with approximately 20–30 synthetic messages across a few threads and 10 
 
 - [ ] Record query, expected IDs/facts, model revision, runtime, generation settings, result, and structured diagnostic codes in synthetic benchmark runs. Never persist private-mail traces.
 - [ ] Score retrieval by expected IDs and filter correctness; manually review summaries for omissions and unsupported claims.
-- [ ] Record end-to-end latency and peak memory on the actual Mac. Set budgets from measurements.
-- [ ] Keep date-range, repeated-fetch, deletion, and cache-clearing checks separate from model quality evaluations.
+- [x] Measure/display end-to-end elapsed time, actual model-call counts, worker peak RAM, and MLX allocator memory on macOS; synthetic checks and user-run MLX/GGUF trials exist.
+- [ ] Record repeatable benchmark latency/memory results and establish budgets from those measurements; ad hoc timings are not the comparison benchmark.
+- [x] Keep date-boundary, repeated-fetch, RAM-retention, and conversation-clearing regression tests separate from model quality evaluations.
+- [x] Add separate deletion/all-mail cleanup, stale-output invalidation, coverage preservation, draft undo, profile reset, and safe preset-removal checks using synthetic mail and temporary model fixtures.
 
 ### Repeatable model comparison benchmark
 
@@ -189,7 +199,7 @@ Start with approximately 20–30 synthetic messages across a few threads and 10 
 ## 9. Later compatibility and release work
 
 - [x] Add local GGUF selection and optional pinned llama.cpp Python backend; smoke-test on macOS.
-- [ ] Validate native Windows execution and distribute the llama.cpp runtime in packaged builds.
+- [ ] Bundle the llama.cpp runtime in packaged Windows builds and validate DLL loading on a fresh device without a compiler. Native Windows source-run validation remains a separate item below.
 - [x] Add a pinned, SHA-256-verified Qwen3.5 GGUF Q4_K_M download preset beside MLX; preserve independent selection/settings and custom model paths.
 - [x] Include the pinned upstream Windows x64 CPU llama.cpp wheel in the base `uv run --locked main.py` environment; verify Windows dependency resolution without changing the macOS extras.
 - [ ] Validate the selected GGUF preset on real Windows hardware; macOS cross-platform resolution is not native Windows validation.
@@ -214,7 +224,8 @@ No Docker distribution, separate application SSO, automatic fetching, automatic 
 - [x] Historical synthetic check: 20 emails/20 quote-checked cards in five calls; this preceded removal of the overview LLM call.
 - [x] Regression test: overview ordering uses existing findings only and cannot call a model or fail JSON parsing.
 - [x] Current synthetic MLX check: 10 emails yielded 10 source-checked summary records in two extraction calls (15.8 seconds on this Mac); local overview added no model call. This does not establish semantic accuracy.
-- [x] Native Cocoa diagnostics/details dialog smoke check; OS TSM messages still reproduced, without a crash in that check. Keep the OS diagnostic investigation open; do not hide stderr.
+- [x] Native Cocoa diagnostics/details dialog smoke check; OS TSM messages still reproduced, without a crash in that check.
+- [ ] Investigate the reproduced macOS TSM native diagnostic; asynchronous read-only dialogs are implemented but are not a confirmed fix. Do not hide stderr.
 - [x] Local Turkish reply drafting without a send grant or delivery.
 - [x] Mocked send tests: canceled approval makes no call, approved payload stays frozen, success prevents duplicate submission, ambiguous failure is not retried.
 - [ ] Broader summary accuracy, adversarial mail, real Gmail delivery, and native Windows checks remain required before broad use.

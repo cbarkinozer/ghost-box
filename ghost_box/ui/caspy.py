@@ -18,12 +18,22 @@ class DownloadTask(QThread):
     progress = Signal(str)
     outcome = Signal(str)
 
-    def __init__(self, folder, parent, manifest=None):
+    def __init__(self, folder, parent, manifest=None, removing=False):
         super().__init__(parent)
         self.folder = folder
         self.manifest = manifest
+        self.removing = removing
 
     def run(self):
+        if self.removing:
+            try:
+                model_download.remove_preset(self.folder.parent, self.manifest['repo'])
+                self.outcome.emit('Downloaded preset removed. You can download it again.')
+            except ValueError as error:
+                self.outcome.emit(str(error))
+            except OSError:
+                self.outcome.emit('Could not finish removing the preset. Check model-folder permissions and retry.')
+            return
         try:
             model_download.download(self.folder, self.progress.emit, self.isInterruptionRequested, self.manifest)
             self.outcome.emit("Download complete. Model is available locally.")
@@ -39,6 +49,7 @@ class DownloadTask(QThread):
 
 class ModelPanel(QWidget):
     parameters_changed = Signal()
+    remove_requested = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -66,6 +77,10 @@ class ModelPanel(QWidget):
         self.download_button = QPushButton("Download preset (~3.1 GB)")
         self.download_button.clicked.connect(self.download_preset)
         layout.addWidget(self.download_button)
+        self.remove_button = QPushButton('Remove preset…')
+        self.remove_button.setToolTip('Removes only application-managed preset files. Custom model folders and files are never removed.')
+        self.remove_button.clicked.connect(self.remove_requested.emit)
+        layout.addWidget(self.remove_button)
         self.cancel_button = QPushButton("Cancel download")
         self.cancel_button.setEnabled(False)
         self.cancel_button.hide()
@@ -123,6 +138,9 @@ class ModelPanel(QWidget):
         reload = QPushButton('Reload JSON')
         reload.clicked.connect(self.load_parameters)
         form.addRow(reload)
+        self.reset_button = QPushButton('Reset model defaults')
+        self.reset_button.clicked.connect(self.reset_parameters)
+        form.addRow(self.reset_button)
         self.parameter_status = QLabel()
         self.parameter_status.setWordWrap(True)
         self.parameter_status.setTextFormat(Qt.TextFormat.PlainText)
@@ -202,6 +220,34 @@ class ModelPanel(QWidget):
         except (OSError, ValueError, KeyError, TypeError, AttributeError):
             self.parameter_status.setText('Could not save profile. Check JSON format and folder permissions.')
 
+    def reset_parameters(self):
+        if not self.selector.currentData():
+            return
+        try:
+            inference_settings.reset(self.parameter_file, self.selector.currentData())
+            self.load_parameters()
+            self.parameter_status.setText('Model defaults restored and saved; other profiles kept.')
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            self.parameter_status.setText('Could not reset this profile. Check JSON format and permissions; other profiles were not replaced.')
+
+    def remove_downloaded(self, preset):
+        if self.task is not None or self.selector.currentData() != preset:
+            return
+        manifest = model_download.PRESETS.get(preset)
+        if manifest is None:
+            return
+        self.task = DownloadTask(self.preset_folder(preset), self, manifest, removing=True)
+        self.lock_files()
+        self.status.setText('Removing downloaded preset…')
+        self.task.outcome.connect(self.status.setText)
+        self.task.finished.connect(self.download_finished)
+        self.task.start()
+
+    def lock_files(self):
+        for control in (self.selector, self.choose, self.choose_gguf, self.download_button, self.remove_button):
+            control.setEnabled(False)
+        self.parameters_changed.emit()
+
     def preset_folder(self, selected):
         return self.model_folder if selected == PRESET else self.gguf_folder
 
@@ -209,11 +255,13 @@ class ModelPanel(QWidget):
         selected = self.selector.currentData()
         manifest = model_download.PRESETS.get(selected)
         folder = self.preset_folder(selected)
+        self.reset_button.setEnabled(bool(selected))
         downloaded = bool(manifest and model_download.ready(folder, manifest))
         size = sum(item['size'] for item in manifest['files']) / 10**9 if manifest else 0
         self.download_button.setText("Preset downloaded" if downloaded else
                                      f"Download preset (~{size:.1f} GB)" if manifest else "Download preset")
         self.download_button.setEnabled(bool(manifest) and not downloaded and self.task is None)
+        self.remove_button.setEnabled(bool(manifest) and folder.exists() and self.task is None)
         if not selected:
             text = "No model selected."
         elif manifest:
@@ -235,10 +283,7 @@ class ModelPanel(QWidget):
         if manifest is None or self.task is not None:
             return
         self.task = DownloadTask(self.preset_folder(selected), self, manifest)
-        self.selector.setEnabled(False)
-        self.choose.setEnabled(False)
-        self.choose_gguf.setEnabled(False)
-        self.download_button.setEnabled(False)
+        self.lock_files()
         self.cancel_button.setEnabled(True)
         self.cancel_button.show()
         self.status.setText("Checking preset files…")
@@ -261,6 +306,7 @@ class ModelPanel(QWidget):
         manifest = model_download.PRESETS.get(self.selector.currentData())
         if not manifest or not model_download.ready(self.preset_folder(self.selector.currentData()), manifest):
             self.status.setText(outcome)
+        self.parameters_changed.emit()
 
     def selected_folder(self):
         selected = self.selector.currentData()

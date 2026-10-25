@@ -41,3 +41,14 @@ class SettingsTests(unittest.TestCase):
             legacy['profiles'][PRESET]['max_output_tokens'] = 1111
             path.write_text(json.dumps(legacy))
             self.assertEqual(parameters(path, PRESET)['max_output_tokens'], 1111)
+
+    def test_reset_restores_shipped_model_defaults_and_preserves_other_profiles(self):
+        from ghost_box.models.settings import reset,defaults
+        from ghost_box.models.download import GGUF_PRESET
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/'settings.json'
+            save(path,GGUF_PRESET,defaults(GGUF_PRESET) | {'temperature':0.2,'max_output_tokens':64})
+            save(path,'/custom/model',defaults('custom') | {'temperature':0.4})
+            reset(path,GGUF_PRESET)
+            self.assertEqual(parameters(path,GGUF_PRESET),defaults(GGUF_PRESET))
+            self.assertEqual(parameters(path,'/custom/model')['temperature'],0.4)

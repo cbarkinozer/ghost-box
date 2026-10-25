@@ -53,6 +53,17 @@ def parameters(path, model):
     return validate(data['default'] | data['profiles'].get(model, builtins['profiles'].get(model, {})))
 
 
+def defaults(model):
+    data = json.loads(DEFAULT_FILE.read_text(encoding='utf-8'))
+    return validate(data['default'] | data['profiles'].get(model, {}))
+
+
+def reset(path, model):
+    data = read_settings(path)
+    data['profiles'][model] = defaults(model)
+    write_settings(path, data)
+
+
 def save(path, model, values):
     validate(values)
     data = read_settings(path)

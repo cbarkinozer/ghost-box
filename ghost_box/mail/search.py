@@ -6,9 +6,12 @@ import re
 import unicodedata
 
 
+def folded(text):
+    return unicodedata.normalize('NFKC', text.casefold()).replace('\u0307', '').replace('ı', 'i')
+
+
 def tokens(text):
-    text = unicodedata.normalize('NFKC', text.casefold()).replace('\u0307', '').replace('ı', 'i')
-    return re.findall(r'\w+', text)
+    return re.findall(r'\w+', folded(text))
 
 
 def search(messages, query, limit=5):
@@ -29,7 +32,13 @@ def search(messages, query, limit=5):
             count = counts[term]
             score += inverse * count * 2.5 / (count + 1.5 * (0.25 + 0.75 * length / max(1, average)))
         if score:
-            # Keep tool output compact; the full selected mail still accompanies the answer.
+            # Keep ranked results compact; callers choose the bounded excerpts to supply.
             results.append({'id': message['id'], 'source': message.get('source', source),
                             'subject': message['subject'], 'score': round(score, 4)})
     return sorted(results, key=lambda item: (-item['score'], item['id']))[:limit]
+
+
+def matches(message, query, field='all'):
+    """Literal, case-insensitive inbox filtering; no model or search index."""
+    fields = ('sender', 'recipients', 'cc', 'subject', 'body', 'id') if field == 'all' else (field,)
+    return any(folded(query) in folded(str(message.get(key, ''))) for key in fields)

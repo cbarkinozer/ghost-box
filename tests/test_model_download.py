@@ -2,6 +2,7 @@
 
 import hashlib
 import io
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -54,3 +55,33 @@ class DownloadTests(unittest.TestCase):
             network.reset_mock()
             models.download(folder,Mock(),lambda:False,manifest)
             network.assert_not_called()
+
+    def test_remove_preset_refuses_custom_files_links_and_wrong_identity(self):
+        payload=b'GGUF synthetic'
+        manifest=dict(repo='test/preset',revision='pinned',files=[dict(name='model.gguf',size=len(payload),
+                     algorithm='sha256',digest=hashlib.sha256(payload).hexdigest())])
+        with tempfile.TemporaryDirectory() as directory, patch.dict(models.PRESETS,{'test/preset':manifest}):
+            root=Path(directory)/'models';folder=root/'pinned';folder.mkdir(parents=True)
+            file=folder/'model.gguf';file.write_bytes(payload)
+            marker=folder/'download-complete.json';marker.write_text(json.dumps(manifest))
+            private=folder/'custom-notes.txt';private.write_text('User-owned file')
+            with self.assertRaises(ValueError):models.remove_preset(root,'test/preset')
+            self.assertTrue(file.exists());private.unlink()
+            with self.assertRaises(ValueError):models.remove_preset(root,'/custom/model.gguf')
+            marker.write_text('{}')
+            with self.assertRaises(ValueError):models.remove_preset(root,'test/preset')
+            self.assertTrue(file.exists());marker.unlink()
+            # Symlink refusal must happen before any file is removed.
+            outside=Path(directory)/'custom.gguf';outside.write_bytes(payload)
+            file.unlink()
+            try:
+                file.symlink_to(outside)
+            except OSError:  # Windows may disallow symlinks without Developer Mode.
+                pass
+            else:
+                with self.assertRaises(ValueError):models.remove_preset(root,'test/preset')
+                self.assertEqual(outside.read_bytes(),payload)
+                file.unlink()
+            file.write_bytes(payload)
+            models.remove_preset(root,'test/preset')
+            self.assertFalse(folder.exists());self.assertEqual(outside.read_bytes(),payload)

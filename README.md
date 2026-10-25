@@ -8,7 +8,7 @@ A lightweight desktop email assistant powered by **Caspy**, your local small lan
 
 Ghost-box helps you summarize email conversations, search downloaded messages, and ask questions with references to the original mail. It is designed for macOS and Windows, with a small Python codebase that is straightforward to read, review, and maintain.
 
-> **Status: local Q&A and summarization.** Gmail fetch/reading, RAM-only emails, model downloads/selection, MLX and local GGUF inference, batch-task progress, memory reporting, and JSON generation profiles are implemented. Synthetic offline and UI checks passed on Apple Silicon. Search, cleanup controls, broader quality evaluations, Windows validation, and packaging remain planned.
+> **Status: local Q&A and summarization.** Gmail fetch/reading, RAM-only emails, model downloads/selection, MLX and local GGUF inference, batch-task progress, memory reporting, and JSON generation profiles are implemented. Synthetic offline and UI checks passed on Apple Silicon. Literal inbox search, RAM cleanup controls and fetch coverage are implemented; broader quality evaluations, native Windows validation, and packaging remain planned.
 
 ## Purpose
 
@@ -228,8 +228,16 @@ The GGUF artifact is [Qwen_Qwen3.5-4B-Q4_K_M.gguf](https://huggingface.co/bartow
 
 Models live under Qt's application-data directory at `models/<revision>/` (`~/Library/Application Support/Ghost-box/models/` on macOS). This is separate from session-only emails. There is no duplicate Hub cache. Cancel removes the current partial file; verified completed files are reused on retry. Transfers interrupted within one file restart that file. Closing during a download requests cancellation; close again after it stops. Network reads have 20-second timeouts.
 
-The preset's [model card](https://huggingface.co/mlx-community/Qwen3.5-4B-MLX-4bit) uses `mlx-vlm`. A downloaded model is not proof of runtime compatibility. Local folders are never modified; compatible MLX models can be used for inference, while unsupported models report an error. Explicit model removal remains a future increment.
+The preset's [model card](https://huggingface.co/mlx-community/Qwen3.5-4B-MLX-4bit) uses `mlx-vlm`. A downloaded model is not proof of runtime compatibility. Local folders are never modified; compatible MLX models can be used for inference, while unsupported models report an error. **Remove preset…** deletes only the selected built-in preset after confirmation and worker unloading. Removal runs off the UI thread and refuses linked/reparse-point folders/files, unknown files, and completion records belonging to another preset; custom model selections are never removal targets. No recursive deletion is used. Model profiles remain saved, and the preset can be downloaded again.
 
+
+### Inbox search, coverage, and local cleanup
+
+The mail sidebar has an instant literal **Search mail…** field with **All text / Sender / Subject / Body** scopes. Matching is case-insensitive (including Turkish I variants), uses RAM only, and requires no loaded model. This filters the displayed inbox, independently of Caspy's BM25 tool. Hidden rows are deselected; **Select all** and inference/deletion use only visible selections. Clearing the filter reveals messages without silently selecting them.
+
+Fetch coverage records the last successful local From/To range, category exclusions, fetched count and completion time. The sidebar shows retained/visible counts and locally removed counts; hover for full details, including the year and excluded Spam/Trash/Drafts. Editing From/To or Promotions does not change recorded coverage. Cancelled/failed fetches preserve the previous mail/coverage and show the last-attempt status; a complete empty fetch records a new zero-message coverage. Answers keep the original coverage text in RAM with their source snapshot, available in the answer-header tooltip even after a later fetch.
+
+**Delete local** removes selected visible messages from RAM and clears every conversation referencing them, because derived answers can contain removed content. Unrelated conversations remain. Source-dependent inference is stopped before deletion and late output cannot repopulate the answer. A later Fetch may retrieve the same messages again; Gmail is never modified. **Clear all mail** removes the fetched inbox, all conversations/snapshots, fetch coverage and search/question text, while retaining account credentials, model files and settings. Cleanup is disabled during account/fetch operations; cancel the fetch and wait for it to finish before clearing. **Clear sessions** remains the separate control for derived conversations only.
 
 ### Ask selected emails
 
@@ -309,7 +317,7 @@ The local, ignored `oauth-client.json` stays beside `main.py`. Inference workers
 
 ### Load, unload, and output limits
 
-**Load** prepares the selected local model without requiring Gmail or selected emails. Ask, Summarize, and Follow up also load it on demand. **Unload** releases an idle/loading worker; during generation use **Stop**, which cancels and unloads it. Model switching unloads the previous worker. Profile changes take effect through Reload or the next request, which restarts the worker when needed. Only one worker/model is retained. It reads commands from stdin while idle, with no background inference or network polling.
+**Load** prepares the selected local model without requiring Gmail or selected emails. Ask, Summarize, and Follow up also load it on demand. **Unload** releases an idle/loading worker; during generation use **Stop**, which cancels and unloads it. Model switching unloads the previous worker. **Reset model defaults** restores and saves the shipped numeric defaults for the selected preset/custom model without overwriting other model profiles. Invalid JSON must still be repaired before changing a profile. Profile changes take effect through Reload or the next request, which restarts the worker when needed. Only one worker/model is retained. It reads commands from stdin while idle, with no background inference or network polling.
 
 Five idle minutes after loading or finishing a request, the UI terminates the worker. The timer is stopped while generating and restarted after completion. Worker protocol commands are only `load` and `run`; email-bearing request dictionaries and generation caches are cleared before waiting for another command. The UI keeps the displayed answer and its source snapshot in RAM, so unloading does not erase useful output.
 
@@ -362,7 +370,7 @@ These diagnostics explain structural/source-validation failures, not semantic co
 
 ### Reviewed replies and forwarding
 
-Use card action links or the email-preview **Reply / Reply all / Forward** buttons. Recipients are filled deterministically from Reply-To/From, To, and CC; reply-all removes the connected account and duplicate recipients. Recipients and subject remain editable. The model receives only the selected email and your instruction and produces only a draft body. It cannot choose recipients or send anything. Drafts can be edited or explicitly copied without enabling sending.
+Use card action links or the email-preview **Reply / Reply all / Forward** buttons. Recipients are filled deterministically from Reply-To/From, To, and CC; reply-all removes the connected account and duplicate recipients. Recipients and subject remain editable. The model receives only the selected email and your instruction and produces only a draft body. It cannot choose recipients or send anything. Drafts can be edited or explicitly copied without enabling sending. **Undo Caspy rewrite** restores the exact text that existed before the most recent generation, including after a failed/interrupted attempt. The one-level backup stays in RAM, is unavailable while generation/send/authorization is active or the sent dialog is locked, and is cleared on close. Undo never sends or changes recipients.
 
 Sending initially remains disabled. **Enable Gmail sending** opens the system-browser OAuth flow for the existing account with `gmail.readonly` plus `gmail.send`. Add the send scope to the OAuth consent configuration if needed; no Gmail password or broader modify scope is used. Authorizing a different account does not overwrite the saved connection. See Google's [scope guidance](https://developers.google.com/workspace/gmail/api/auth/scopes).
 

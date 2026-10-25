@@ -25,6 +25,7 @@ class ComposeDialog(QDialog):
         self.sending = False
         self.cleaned = False
         self.warning = ''
+        self.previous_body = None
         self.setWindowTitle({'reply': 'Reply', 'reply_all': 'Reply all', 'forward': 'Forward'}[mode])
         self.resize(760, 720)
         values = prepare(source, account, mode)
@@ -47,6 +48,9 @@ class ComposeDialog(QDialog):
         self.generate_button = QPushButton('Prepare / rewrite draft')
         self.generate_button.clicked.connect(self.generate)
         actions.addWidget(self.generate_button)
+        self.undo_button = QPushButton('Undo Caspy rewrite')
+        self.undo_button.clicked.connect(self.undo_rewrite)
+        actions.addWidget(self.undo_button)
         self.permission_button = QPushButton('Enable Gmail sending')
         self.permission_button.clicked.connect(self.enable_sending)
         actions.addWidget(self.permission_button)
@@ -78,6 +82,7 @@ class ComposeDialog(QDialog):
         busy = self.task is not None or self.generating
         self.generate_button.setEnabled(not busy and not self.owner.runtime.busy
                                         and self.owner.runtime.state != 'unloading' and not self.locked)
+        self.undo_button.setEnabled(not busy and not self.locked and self.previous_body is not None)
         self.permission_button.setEnabled(not busy and not self.locked)
         self.send_button.setEnabled(not busy and self.allowed and bool(self.body.toPlainText().strip()) and not self.locked)
         for field in (self.to, self.cc, self.subject, self.instructions):
@@ -123,7 +128,8 @@ class ComposeDialog(QDialog):
         configuration = self.owner.model_configuration()
         if configuration is None:
             self.status.setText(self.owner.inference_status.text()); return
-        current = self.body.toPlainText()
+        self.previous_body = self.body.toPlainText()
+        current = self.previous_body
         if self.mode == 'forward' and self.forwarded and current.endswith(self.forwarded):
             current = current[:-len(self.forwarded)]
         question = draft_prompt(self.source, instruction, self.owner.language.currentData(), self.mode)
@@ -154,6 +160,14 @@ class ComposeDialog(QDialog):
                                 if event.get('status') == 'success' else 'Draft interrupted; inspect any partial text.'))
             self.status.setText(self.status.text() + f' · {time.monotonic() - self.draft_started:.1f} s')
             self.update_buttons()
+
+    def undo_rewrite(self):
+        if self.generating or self.task is not None or self.locked or self.previous_body is None:
+            return
+        previous, self.previous_body = self.previous_body, None
+        self.body.setPlainText(previous)
+        self.status.setText('Previous draft restored. Nothing was sent.')
+        self.update_buttons()
 
     def review_send(self):
         if self.task is not None or self.generating or self.locked or not self.allowed:
@@ -206,6 +220,7 @@ class ComposeDialog(QDialog):
             self.generating = False
         self.owner.runtime.event.disconnect(self.model_event)
         self.owner.runtime.state_changed.disconnect(self.update_buttons)
+        self.previous_body = None
         self.body.clear(); self.instructions.clear(); self.source.clear(); self.forwarded = ''
         self.to.clear(); self.cc.clear(); self.subject.clear()
 

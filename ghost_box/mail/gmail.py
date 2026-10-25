@@ -2,7 +2,7 @@
 
 import json
 import sys
-from datetime import timedelta
+from datetime import datetime, timedelta
 from functools import partial
 from pathlib import Path
 
@@ -177,7 +177,8 @@ def fetch(first, last, mailbox, account, progress, cancelled, exclude_promotions
                 if not token:
                     stopped = cancelled()
                     if not stopped:
-                        mailbox.replace(account, pending)
+                        mailbox.replace(account, pending, dict(first=first, last=last,
+                            exclude_promotions=exclude_promotions, completed_at=datetime.now(), count=count))
                     return {"count": count, "cancelled": stopped}
         return {"count": count, "cancelled": True}
     except AccountError:

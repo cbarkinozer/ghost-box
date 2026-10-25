@@ -26,6 +26,20 @@ class History:
         self.message = len(self.sessions[session]['messages']) - 1 if message is None else message
         return self.current
 
+    def remove_sources(self, identifiers):
+        """Drop whole dependent sessions: derived answers can quote removed mail too."""
+        current = self.sessions[self.session] if self.session >= 0 else None
+        self.sessions = [session for session in self.sessions if not any(
+            identifiers.intersection(message.get('sources', {})) for message in session['messages'])]
+        retained = next((i for i, session in enumerate(self.sessions) if session is current), None)
+        if retained is not None:
+            self.session = retained
+        elif self.sessions:
+            self.session = len(self.sessions) - 1
+            self.message = len(self.sessions[self.session]['messages']) - 1
+        else:
+            self.session = self.message = -1
+
     def clear(self):
         self.sessions.clear()
         self.session = self.message = -1
