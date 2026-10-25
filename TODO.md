@@ -93,26 +93,41 @@ Initial preset: [mlx-community/Qwen3.5-4B-MLX-4bit](https://huggingface.co/mlx-c
 ## 6. Local inference and lifecycle
 
 - [x] Run inference in a separate on-demand process with a small explicit communication protocol.
-- [x] Show unloaded/loading/generating/error states, streamed output, and **Stop**; unload after each workflow.
-- [ ] Add **Unload model** and a configurable idle timeout. Do not unload during active generation.
-- [ ] Unload the previous model before switching and stop the worker on application exit.
+- [x] Show unloaded/loading/generating/error states, streamed output, and **Stop**; retain the worker while idle and unload after five minutes.
+- [x] Add manual Load/Unload and five-minute warm-model idle timeout; pause the timer during generation.
+- [x] Unload before model/settings reload and stop the worker on exit; retain only one model.
 - [x] Add collapsed inference controls with per-model numeric profiles in local JSON and reviewed preset defaults.
-- [ ] Add reset-to-default controls; idle timeout remains unnecessary while workers exit after each request.
+- [ ] Add reset-to-default controls if needed; the warm-worker idle timeout is currently fixed at five minutes.
 - [x] Validate sampling parameters, input/output budgets, and task caps in both UI and worker.
-- [x] Check offline MLX and GGUF generation on macOS with synthetic messages; each worker exits afterward.
-- [x] Show worker peak RAM and MLX allocator memory; distinguish unloaded state and historical measurements.
+- [x] Check offline MLX/GGUF warm reuse and request-cache clearing on macOS with synthetic messages.
+- [x] Show explicit loaded/unloaded state, worker peak RAM, and MLX allocator memory; distinguish historical measurements.
+- [x] Report actual LLM calls separately from tasks; show end-to-end elapsed seconds.
+- [x] Raise the Qwen preset output budget to 2,048, migrate old 512 defaults, and mark token-limit cutoffs as partial.
+- [x] Show a qualified full-attention KV-cache growth illustration; do not imply an exact total-RAM prediction.
 
-**Done when:** the selected model responds without blocking the UI, generation can stop, and idle unloading works.
+**Done when:** the selected model responds without blocking the UI, generation can stop, and manual/idle unloading releases model memory.
 
 ## 7. Email assistance: bounded workflows
+
+- [x] Add Follow up using the previous answer/request and its original source emails in RAM.
+- [x] Add optional model-planned BM25 search restricted to scoped mail; count the extra call and validate the tool schema.
+- [x] Add a visible, saved Skip Promotions fetch filter, initially enabled.
+
+- [x] Render completed/partial output as native Qt Markdown; block external navigation and resource loading.
+- [x] Link known source citations to email preview without changing selection; support Turkish/English labeled references as well as bracketed numbers.
+- [x] Make Follow up discoverable immediately after an answer; an empty-input click focuses the question field and preserves output.
+- [x] Add saved response-language preference (Türkçe initially, English available).
+- [x] Give answers more space and use native system fonts with readable minimum sizes.
+- [x] Organize application code into ui, mail, and models packages; keep main.py as launcher.
 
 - [x] Select multiple emails, select all fetched emails, or clear selection.
 - [x] Show input characters and approximate tokens (characters / 4, rounded up).
 - [x] Ask one question using only selected emails; stream the answer and support Stop.
-- [x] Keep questions and answers in RAM; invalidate answers when scope changes.
-- [x] Exit the inference process after each answer to unload the model. Persistent loading and idle timeout remain deferred.
+- [x] Keep questions and answers in RAM; preserve the answer while browsing or changing next-request options, with its original source snapshot shown.
+- [x] Reuse one warm worker between answers; clear request caches and unload manually or after five idle minutes.
 
-- [x] Add Summarize for selected emails with optional RAM-only additional instructions and source-ID prompting.
+- [x] Add Summarize for selected emails with optional RAM-only instructions.
+- [x] Summarize emails independently and attach source/subject/sender in application code; isolate oversized-email reduction and strip generated citation labels.
 - [x] Split oversized selections into token-budgeted evidence tasks and hierarchical synthesis; show created/completed counts and enforce a call limit.
 - [ ] Evaluate summary omissions, source references, and conflicts across batch boundaries.
 - [ ] Summarize a conversation chronologically, limiting repeated quoted content and respecting the input budget.
@@ -157,7 +172,10 @@ Start with approximately 20–30 synthetic messages across a few threads and 10 
 
 ## Future optimizations
 
-- [ ] Evaluate a small local spam/attention classifier; optionally gray out low-attention mail while keeping it selectable and available. No automatic removal or provider-side action.
+- [ ] Evaluate a small local spam/attention decision model; optionally gray out low-attention mail while keeping it selectable and available. No automatic removal or provider-side action.
+- [ ] Later add a natural-language fetch description next to From/To: people, date ranges, or keywords. Translate intent to validated visible filters before a user-triggered Fetch; do not implement yet.
+- [ ] Consider additional bounded read-only tools after BM25, only for demonstrated needs; no general agent framework.
+- [ ] Consider explicit Social/Updates category controls after the current Promotions option; do not silently hide categories.
 
 ## Keep deferred
 

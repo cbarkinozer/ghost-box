@@ -11,12 +11,12 @@ from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import AuthorizedSession, Request
 from google.auth.exceptions import RefreshError
 
-from mail_text import decode_message
+from .text import decode_message
 
 SCOPE = "https://www.googleapis.com/auth/gmail.readonly"
 SERVICE = "ghost-box"
 ACCOUNT = "gmail"
-CLIENT_FILE = Path(__file__).with_name("oauth-client.json")
+CLIENT_FILE = Path(__file__).resolve().parents[2] / "oauth-client.json"
 
 
 class AccountError(RuntimeError):
@@ -132,7 +132,7 @@ def time_bounds(first, last):
     )
 
 
-def fetch(first, last, mailbox, account, progress, cancelled):
+def fetch(first, last, mailbox, account, progress, cancelled, exclude_promotions=True):
     lower, upper = time_bounds(first, last)
     count = 0
     pending = []
@@ -155,7 +155,8 @@ def fetch(first, last, mailbox, account, progress, cancelled):
             while not cancelled():
                 response = session.get(
                     "https://gmail.googleapis.com/gmail/v1/users/me/messages",
-                    params={"q": f"after:{lower - 1} before:{upper} -in:spam -in:trash -in:drafts",
+                    params={"q": f"after:{lower - 1} before:{upper} -in:spam -in:trash -in:drafts"
+                            + (" -category:promotions" if exclude_promotions else ""),
                             "maxResults": 100, **({"pageToken": token} if token else {})},
                     timeout=20,
                 )

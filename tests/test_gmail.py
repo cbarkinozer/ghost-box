@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
-import gmail
+from ghost_box.mail import gmail
 
 
 class GmailTests(unittest.TestCase):
@@ -25,7 +25,7 @@ class GmailTests(unittest.TestCase):
             self.assertNotIn("PRIVATE_RESPONSE", str(failure.exception))
 
     def test_restore_and_disconnect_are_local(self):
-        with patch("gmail.credential_store") as backend:
+        with patch("ghost_box.mail.gmail.credential_store") as backend:
             store = backend.return_value
             store.get_password.return_value = json.dumps({"email": "test@example.com"})
             self.assertEqual(gmail.saved_account(), "test@example.com")
@@ -36,7 +36,7 @@ class GmailTests(unittest.TestCase):
         with tempfile.NamedTemporaryFile(mode="w+", suffix=".json") as file:
             json.dump({"installed": {"token_uri": "https://example.com/token"}}, file)
             file.flush()
-            with patch("gmail.InstalledAppFlow.from_client_config") as factory:
+            with patch("ghost_box.mail.gmail.InstalledAppFlow.from_client_config") as factory:
                 with self.assertRaises(ValueError):
                     gmail.connect(file.name)
                 factory.assert_not_called()
@@ -50,8 +50,8 @@ class GmailTests(unittest.TestCase):
             json.dump(config, file)
             file.flush()
             with (
-                patch("gmail.InstalledAppFlow.from_client_config") as factory,
-                patch("gmail.credential_store") as backend,
+                patch("ghost_box.mail.gmail.InstalledAppFlow.from_client_config") as factory,
+                patch("ghost_box.mail.gmail.credential_store") as backend,
             ):
                 flow = factory.return_value
                 credentials = flow.run_local_server.return_value

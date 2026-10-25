@@ -5,12 +5,13 @@ from pathlib import Path
 from PySide6.QtCore import QSettings, QStandardPaths, QThread, Qt, Signal
 from PySide6.QtWidgets import (
     QComboBox, QFileDialog, QLabel, QPushButton, QVBoxLayout, QWidget,
-    QDoubleSpinBox, QSpinBox, QFormLayout, QScrollArea,
+    QDoubleSpinBox, QSpinBox, QFormLayout, QScrollArea, QHBoxLayout,
 )
 
-import model_download
-import inference_settings
-from model_download import PRESET
+from ..models import download as model_download
+from ..models import settings as inference_settings
+from ..models.download import PRESET
+from ..models.projection import describe
 
 
 class DownloadTask(QThread):
@@ -64,16 +65,28 @@ class ModelPanel(QWidget):
         layout.addWidget(self.download_button)
         self.cancel_button = QPushButton("Cancel download")
         self.cancel_button.setEnabled(False)
+        self.cancel_button.hide()
         self.cancel_button.clicked.connect(lambda: self.task.requestInterruption())
         layout.addWidget(self.cancel_button)
         self.status = QLabel()
         self.status.setWordWrap(True)
         self.status.setTextFormat(Qt.TextFormat.PlainText)
         layout.addWidget(self.status)
-        note = QLabel("Models are saved to disk. Emails and answers stay in RAM. Models unload after each answer.")
+        note = QLabel("Emails and answers stay in RAM.")
         note.setWordWrap(True)
         layout.addWidget(note)
-        self.memory = QLabel('Model unloaded. Memory is measured during inference.')
+        self.model_state = QLabel('Model: unloaded')
+        layout.addWidget(self.model_state)
+        self.model_state.setWordWrap(True)
+        self.model_state.setTextFormat(Qt.TextFormat.PlainText)
+        lifecycle = QHBoxLayout()
+        self.load_button = QPushButton('Load')
+        self.unload_button = QPushButton('Unload')
+        self.unload_button.setEnabled(False)
+        lifecycle.addWidget(self.load_button)
+        lifecycle.addWidget(self.unload_button)
+        layout.addLayout(lifecycle)
+        self.memory = QLabel('Memory is measured during inference.')
         self.memory.setWordWrap(True)
         self.memory.setToolTip('Worker peak RAM includes model, tokenizer, caches, and runtime. MLX active/peak values are allocator measurements, not additional RAM to sum. Dedicated GPU VRAM is not measured.')
         layout.addWidget(self.memory)
@@ -93,9 +106,12 @@ class ModelPanel(QWidget):
             control.setRange(lower, upper)
             if kind is float:
                 control.setSingleStep(0.05)
-            control.valueChanged.connect(lambda _value: self.parameters_changed.emit())
+            control.valueChanged.connect(self.parameter_changed)
             self.controls[key] = control
             form.addRow(label, control)
+        self.projection = QLabel()
+        self.projection.setWordWrap(True)
+        form.addRow(self.projection)
         save = QPushButton('Save model profile')
         save.clicked.connect(self.save_parameters)
         form.addRow(save)
@@ -157,6 +173,17 @@ class ModelPanel(QWidget):
             self.parameter_error = True
             self.parameter_status.setText('Cannot load inference-settings.json. Check its format, values, and permissions, then Reload JSON.')
         self.parameters_changed.emit()
+        self.update_projection()
+
+    def parameter_changed(self):
+        self.update_projection()
+        self.parameters_changed.emit()
+
+    def update_projection(self):
+        try:
+            self.projection.setText(describe(self.selected_folder(), self.parameters()))
+        except ValueError:
+            self.projection.setText('Fix inference settings to show the estimate.')
 
     def parameters(self):
         if self.parameter_error:
@@ -178,7 +205,7 @@ class ModelPanel(QWidget):
         if not selected:
             text = "No model selected."
         elif selected == PRESET:
-            state = "Downloaded; not loaded." if downloaded else "Not downloaded completely."
+            state = "Preset downloaded." if downloaded else "Not downloaded completely."
             text = state + "\nMLX requires Apple Silicon."
         elif Path(selected).suffix.lower() == '.gguf' and Path(selected).is_file():
             text = 'Local GGUF selected; llama.cpp backend.'
@@ -196,6 +223,7 @@ class ModelPanel(QWidget):
         self.choose_gguf.setEnabled(False)
         self.download_button.setEnabled(False)
         self.cancel_button.setEnabled(True)
+        self.cancel_button.show()
         self.status.setText("Checking preset files…")
         self.task.progress.connect(self.status.setText)
         self.task.outcome.connect(self.status.setText)
@@ -209,8 +237,10 @@ class ModelPanel(QWidget):
         self.choose.setEnabled(True)
         self.choose_gguf.setEnabled(True)
         self.cancel_button.setEnabled(False)
+        self.cancel_button.hide()
         outcome = self.status.text()
         self.update_status()
+        self.update_projection()
         if not model_download.ready(self.model_folder):
             self.status.setText(outcome)
 

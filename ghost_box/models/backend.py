@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from mail_tasks import TaskError
+from ..mail.tasks import TaskError
 
 
 def load_backend(path, params):
@@ -40,11 +40,19 @@ class MLXBackend:
 
     def generate(self, prompt, maximum):
         from mlx_lm import stream_generate
+        self.finish_reason = None
         # A fresh KV cache for each task; no prompt cache files or conversation history.
         for response in stream_generate(self.model, self.tokenizer, prompt=prompt,
                                         max_tokens=maximum, sampler=self.sampler,
                                         logits_processors=self.processors):
+            if response.finish_reason:
+                self.finish_reason = response.finish_reason
             yield response.text
+
+    def clear_request(self):
+        import gc
+        gc.collect()
+        self.mx.clear_cache()
 
     def memory(self):
         return f'MLX active: {self.mx.get_active_memory() / 2**30:.2f} GiB · peak: {self.mx.get_peak_memory() / 2**30:.2f} GiB'
@@ -81,6 +89,7 @@ class GGUFBackend:
         return (tokens, formatted.stop, formatted.stopping_criteria), len(tokens)
 
     def generate(self, prompt, maximum):
+        self.finish_reason = None
         tokens, stop, stopping = prompt
         for response in self.model.create_completion(
             prompt=tokens, stop=stop or [], stopping_criteria=stopping,
@@ -88,7 +97,19 @@ class GGUFBackend:
             top_p=self.params['top_p'], top_k=self.params['top_k'], min_p=self.params['min_p'],
             presence_penalty=self.params['presence_penalty'], repeat_penalty=self.params['repetition_penalty'],
         ):
-            yield response['choices'][0]['text']
+            choice = response['choices'][0]
+            if choice.get('finish_reason'):
+                self.finish_reason = choice['finish_reason']
+            yield choice['text']
+
+    def clear_request(self):
+        import llama_cpp
+        self.model.reset()
+        memory = llama_cpp.llama_get_memory(self.model.ctx)
+        if memory is not None:
+            llama_cpp.llama_memory_clear(memory, True)
+        self.model._input_ids.fill(0)
+        self.model._scores.fill(0)
 
     def memory(self):
         return ''  # Process peak RAM is reported separately for both backends.

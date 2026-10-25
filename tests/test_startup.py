@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from main import prepare_qt_plugins
+from ghost_box.ui.window import prepare_qt_plugins
 
 
 @unittest.skipUnless(sys.platform == "darwin", "macOS file flags only")
@@ -23,7 +23,7 @@ class StartupTests(unittest.TestCase):
             for path in (root, platforms, plugin):
                 os.chflags(path, path.stat().st_flags | stat.UF_HIDDEN)
             expected = plugin.stat().st_flags & ~stat.UF_HIDDEN
-            with patch("main.QLibraryInfo.path", return_value=str(root)):
+            with patch("ghost_box.ui.window.QLibraryInfo.path", return_value=str(root)):
                 prepare_qt_plugins()
                 prepare_qt_plugins()  # Repeated launches are safe.
             self.assertEqual(plugin.stat().st_flags, expected)

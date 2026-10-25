@@ -8,9 +8,9 @@ import time
 import unittest
 from unittest.mock import Mock, patch
 
-import gmail
-import mail_store
-from mail_text import decode_message
+from ghost_box.mail import gmail
+from ghost_box.mail import store as mail_store
+from ghost_box.mail.text import decode_message
 
 
 def raw_message(identifier, timestamp):
@@ -67,9 +67,9 @@ class FetchTests(unittest.TestCase):
             response(raw_message("end", upper * 1000)),
         ]
         with (
-            patch("gmail.credential_store") as backend,
-            patch("gmail.Credentials.from_authorized_user_info") as credentials,
-            patch("gmail.AuthorizedSession") as factory,
+            patch("ghost_box.mail.gmail.credential_store") as backend,
+            patch("ghost_box.mail.gmail.Credentials.from_authorized_user_info") as credentials,
+            patch("ghost_box.mail.gmail.AuthorizedSession") as factory,
             patch("builtins.open", side_effect=AssertionError("Email fetching must not open files")),
         ):
             mailbox = mail_store.MailStore()
@@ -88,6 +88,7 @@ class FetchTests(unittest.TestCase):
                 self.assertEqual(session.get.call_args_list[2].kwargs["params"]["pageToken"], "next")
                 query = session.get.call_args_list[0].kwargs["params"]["q"]
                 self.assertIn(f"after:{lower - 1} before:{upper}", query)
+                self.assertIn("-category:promotions", query)
             self.assertEqual(len(mail_store.messages(mailbox, "me@example.com")), 1)
             self.assertEqual(len(mail_store.messages(mailbox, "other@example.com")), 1)
             self.assertIsNone(mail_store.message(mailbox, "me@example.com", "old"))
@@ -118,7 +119,8 @@ class FetchTests(unittest.TestCase):
 
             # A complete empty result is a successful replacement with no messages.
             session.get.side_effect = [response({})]
-            gmail.fetch(first, last, mailbox, "me@example.com", Mock(), lambda: False)
+            gmail.fetch(first, last, mailbox, "me@example.com", Mock(), lambda: False, exclude_promotions=False)
+            self.assertNotIn("-category:promotions", session.get.call_args.kwargs["params"]["q"])
             self.assertEqual(len(mail_store.messages(mailbox, "me@example.com")), 0)
             self.assertEqual(len(mail_store.messages(mailbox, "other@example.com")), 1)
 

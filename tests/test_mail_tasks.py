@@ -2,7 +2,7 @@
 
 import unittest
 
-from mail_tasks import TaskError, run, split_emails
+from ghost_box.mail.tasks import TaskError, run, split_emails
 
 
 def message(identifier, body):
@@ -49,14 +49,14 @@ class TaskTests(unittest.TestCase):
         events = []
         def render(system, user):
             return user, len(user)
-        params = {'max_input_tokens': 500, 'max_output_tokens': 64, 'max_tasks': 64}
+        params = {'max_input_tokens': 800, 'max_output_tokens': 64, 'max_tasks': 64}
         # Fixed-length notes require several levels of combination.
         def generate(prompt, maximum):
-            yield 'x' * 150
-        run([message(str(i), 'a' * 180) for i in range(10)], 'Q', params, render, generate,
+            yield 'x' * 200
+        run([message(str(i), 'a' * 350) for i in range(10)], 'Q', params, render, generate,
             lambda done,total,phase: events.append((done,total,phase)), lambda text: None)
         self.assertTrue(any('Additional' in phase for _,_,phase in events))
         self.assertEqual(events[-1][0], events[-1][1])
         with self.assertRaises(TaskError):
-            run([message(str(i), 'a' * 180) for i in range(3)], 'Q', params, render,
-                lambda prompt, maximum: iter(['x' * 420]), lambda *args: None, lambda text: None)
+            run([message(str(i), 'a' * 350) for i in range(3)], 'Q', params, render,
+                lambda prompt, maximum: iter(['x' * 720]), lambda *args: None, lambda text: None)

@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
-import model_download as models
+from ghost_box.models import download as models
 
 
 class DownloadTests(unittest.TestCase):
@@ -16,7 +16,7 @@ class DownloadTests(unittest.TestCase):
         manifest = {'repo': 'test/model', 'revision': 'pinned', 'files': [
             {'name': 'model.safetensors', 'size': len(payload),
              'algorithm': 'sha256', 'digest': hashlib.sha256(payload).hexdigest()}]}
-        with tempfile.TemporaryDirectory() as directory, patch.object(models, 'MANIFEST', manifest), patch.object(models, 'TOTAL_BYTES', len(payload)), patch('model_download.urlopen') as network:
+        with tempfile.TemporaryDirectory() as directory, patch.object(models, 'MANIFEST', manifest), patch.object(models, 'TOTAL_BYTES', len(payload)), patch('ghost_box.models.download.urlopen') as network:
             folder = Path(directory)
             network.return_value = io.BytesIO(payload)
             models.download(folder, Mock(), lambda: False)

@@ -4,7 +4,7 @@ import json
 import math
 from pathlib import Path
 
-DEFAULT_FILE = Path(__file__).with_name('inference_defaults.json')
+DEFAULT_FILE = Path(__file__).parent / "data" / "inference_defaults.json"
 # Bounds also define the native UI controls. No arbitrary runtime kwargs.
 FIELDS = {
     'temperature': ('Temperature', float, 0, 2),
@@ -13,7 +13,7 @@ FIELDS = {
     'min_p': ('Min-p', float, 0, 1),
     'presence_penalty': ('Presence penalty', float, -2, 2),
     'repetition_penalty': ('Repetition penalty', float, 0.1, 2),
-    'max_output_tokens': ('Output tokens', int, 64, 4096),
+    'max_output_tokens': ('Output tokens', int, 64, 32768),
     'max_input_tokens': ('Input tokens / task', int, 1024, 32768),
     'max_tasks': ('Maximum tasks', int, 2, 256),
 }
@@ -38,6 +38,12 @@ def read_settings(path):
     validate(data['default'])
     for profile in data['profiles'].values():
         validate(data['default'] | profile)
+    if data.get('schema_version', 1) < 2:
+        profile = data['profiles'].setdefault('mlx-community/Qwen3.5-4B-MLX-4bit', {})
+        if profile.get('max_output_tokens', data['default']['max_output_tokens']) == 512:
+            profile['max_output_tokens'] = 2048
+        data['schema_version'] = 2
+        write_settings(path, data)
     return data
 
 
@@ -50,6 +56,10 @@ def save(path, model, values):
     validate(values)
     data = read_settings(path)
     data['profiles'][model] = values
+    write_settings(path, data)
+
+
+def write_settings(path, data):
     temporary = path.with_suffix('.tmp')
     temporary.write_text(json.dumps(data, indent=2) + '\n', encoding='utf-8')
     temporary.replace(path)

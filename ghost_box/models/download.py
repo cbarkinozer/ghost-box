@@ -6,7 +6,7 @@ from pathlib import Path
 import shutil
 from urllib.request import urlopen
 
-MANIFEST = json.loads(Path(__file__).with_name("model_manifest.json").read_text())
+MANIFEST = json.loads((Path(__file__).parent / "data" / "model_manifest.json").read_text())
 PRESET = MANIFEST["repo"]
 REVISION = MANIFEST["revision"]
 TOTAL_BYTES = sum(item["size"] for item in MANIFEST["files"])
