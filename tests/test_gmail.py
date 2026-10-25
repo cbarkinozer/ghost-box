@@ -89,3 +89,29 @@ class GmailTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SendAuthorizationTests(unittest.TestCase):
+    def test_send_grant_is_opt_in_and_account_must_match(self):
+        config={'installed':{'auth_uri':'https://accounts.google.com/o/oauth2/auth','token_uri':'https://oauth2.googleapis.com/token'}}
+        with tempfile.NamedTemporaryFile(mode='w+',suffix='.json') as file:
+            json.dump(config,file);file.flush()
+            with (patch('ghost_box.mail.gmail.InstalledAppFlow.from_client_config') as factory,
+                  patch('ghost_box.mail.gmail.credential_store') as backend):
+                flow=factory.return_value;credentials=flow.run_local_server.return_value
+                credentials.to_json.return_value='{"refresh_token":"fake"}'
+                credentials.granted_scopes=[gmail.SCOPE,gmail.SEND_SCOPE]
+                session=flow.authorized_session.return_value.__enter__.return_value
+                session.get.return_value.json.return_value={'emailAddress':'me@example.com'}
+                gmail.connect(file.name,allow_send=True,expected_account='me@example.com')
+                self.assertEqual(factory.call_args.kwargs['scopes'],[gmail.SCOPE,gmail.SEND_SCOPE])
+                stored=json.loads(backend.return_value.set_password.call_args.args[2])
+                self.assertIn(gmail.SEND_SCOPE,stored['scopes'])
+                backend.return_value.set_password.reset_mock()
+                with self.assertRaises(gmail.AccountError):
+                    gmail.connect(file.name,allow_send=True,expected_account='different@example.com')
+                backend.return_value.set_password.assert_not_called()
+                credentials.granted_scopes=[gmail.SCOPE]
+                with self.assertRaises(gmail.AccountError):
+                    gmail.connect(file.name,allow_send=True,expected_account='me@example.com')
+                backend.return_value.set_password.assert_not_called()

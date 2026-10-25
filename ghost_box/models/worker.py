@@ -13,7 +13,10 @@ os.environ['HF_HUB_DISABLE_TELEMETRY'] = '1'
 from .settings import validate
 from ..mail.tasks import TaskError, run
 from ..mail.search import search
+from ..mail.context import SYSTEM, with_language
 from ..mail.summary import summarize
+from ..mail.followup import follow_up, snippet
+from ..mail.steps import Steps
 
 
 def emit(kind, text='', **values):
@@ -47,6 +50,7 @@ def workflow(request, backend, params):
     phase = ''
     truncated = False
     search_tasks = 0
+    steps = Steps(emit)
 
     def memory(force=False):
         nonlocal last_memory
@@ -64,6 +68,8 @@ def workflow(request, backend, params):
             for text in backend.generate(prompt, maximum):
                 memory()
                 yield text
+            if request.get('summarize') and backend.finish_reason == 'length':
+                emit('diagnostic', code='output_limit', stage='generation', call=requests)
             if phase.endswith('Answering') and backend.finish_reason == 'length':
                 truncated = True
                 emit('warning', 'Output token limit reached; this answer is partial. Increase Output tokens and retry.')
@@ -80,7 +86,10 @@ def workflow(request, backend, params):
     status = 'success'
     try:
         question = request['question']
-        if request.get('use_search') and not request.get('summarize'):
+        if request.get('use_search') and not request.get('summarize') and not request.get('follow_up'):
+            query_step = steps.add('search_query')
+            search_step = steps.add('bm25_search', [message.get('source', i) for i, message in enumerate(request['emails'], 1)])
+            steps.set(query_step, 'running')
             phase = 'Planning BM25 search'
             emit('progress', phase, completed=0, total=2)
             prompt, count = backend.render(
@@ -98,15 +107,41 @@ def workflow(request, backend, params):
                     raise ValueError()
             except (ValueError, KeyError, TypeError):
                 raise TaskError('Could not form a search query. Use clearer keywords or turn off BM25 search.') from None
-            matches = search(request['emails'], query)
+            steps.set(query_step, 'done')
+            steps.set(search_step, 'running')
+            matches = search(request['emails'], query, limit=3)
+            steps.set(search_step, 'done')
             emit('search', f'BM25: {query} · {len(matches)} matches in {len(request["emails"])} scoped emails')
             emit('progress', 'Search complete', completed=1, total=2)
-            question += '\n\nBM25 search results (untrusted hints; all scoped emails are still supplied):\n' + json.dumps(matches, ensure_ascii=False)
+            original = {message['id']: message for message in request['emails']}
+            request['emails'] = [original[match['id']] | {'source': match['source'],
+                                  'body': snippet(original[match['id']]['body'], query, width=1200)} for match in matches]
+            question += '\nSearch supplied only the top matching excerpts, not full emails. If evidence is insufficient, say so.'
             search_tasks = 1
             params = params | {'max_tasks': params['max_tasks'] - 1}
-        operation = summarize if request.get('summarize') else run
-        operation(request['emails'], question, params, backend.render, generate,
-            progress, lambda text: emit('text', text))
+        if not request.get('use_search') and not request.get('follow_up') and not request.get('draft'):
+            emit('search', 'BM25 kullanılmadı · Seçili mailler doğrudan inceleniyor.'
+                 if request.get('language') == 'Turkish' else 'BM25 not used · Selected emails are inspected directly.')
+        if request.get('follow_up'):
+            follow_up(request, params, backend.render, generate, progress,
+                      lambda text: emit('text', text), emit, steps=steps)
+        elif request.get('draft'):
+            from ..mail.drafting import DRAFT_SYSTEM
+            prompt, count = backend.render(with_language(DRAFT_SYSTEM, request.get('language', 'English')), question)
+            if count > params['max_input_tokens']:
+                raise TaskError('Draft context exceeds Input tokens. Shorten the instructions or email.')
+            progress(0, 1, 'Answering')
+            for text in generate(prompt, params['max_output_tokens']):
+                emit('text', text)
+            progress(1, 1, 'Complete')
+        elif request.get('summarize'):
+            summarize(request['emails'], question, params, backend.render, generate, progress,
+                      lambda text: emit('text', text), publish=emit,
+                      account=request.get('account', ''), language=request.get('language', 'English'), steps=steps)
+        else:
+            run(request['emails'], question, params | {'max_output_tokens': min(512, params['max_output_tokens'])}, backend.render, generate,
+                progress, lambda text: emit('text', text),
+                system=with_language(SYSTEM, request.get('language', 'English')), steps=steps)
     except TaskError as error:
         emit('error', str(error))
         status = 'error'
@@ -117,6 +152,7 @@ def workflow(request, backend, params):
         backend.clear_request()
         request.clear()
         memory(force=True)
+    steps.finish(status)
     emit('done', status=status, truncated=truncated)
 
 

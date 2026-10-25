@@ -43,5 +43,12 @@ def decode_message(data):
         "timestamp": int(data["internalDate"]),
         "sender": str(message.get("From", "")),
         "recipients": str(message.get("To", "")),
+        "cc": str(message.get("Cc", "")),
+        "reply_to": str(message.get("Reply-To", "")),
+        "message_id": str(message.get("Message-ID", "")),
+        "references": str(message.get("References", "")),
+        "attachment_count": sum(1 for item in message.walk()
+                                if item.get_content_disposition() == 'attachment'
+                                or (item.get_filename() and item.get_content_disposition() != 'inline')),
         "subject": str(message.get("Subject", "(no subject)")), "body": body,
     }

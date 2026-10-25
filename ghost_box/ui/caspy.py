@@ -107,6 +107,8 @@ class ModelPanel(QWidget):
             if kind is float:
                 control.setSingleStep(0.05)
             control.valueChanged.connect(self.parameter_changed)
+            if key == 'max_output_tokens':
+                control.setToolTip('Summary/draft output ceiling. Ask emails and Follow up use at most 512 output tokens for short answers.')
             self.controls[key] = control
             form.addRow(label, control)
         self.projection = QLabel()

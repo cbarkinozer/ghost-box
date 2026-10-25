@@ -3,6 +3,7 @@
 import json
 
 from .context import SYSTEM, build_context
+from .steps import Steps
 
 class TaskError(ValueError):
     """Safe, application-authored planning diagnostic."""
@@ -71,11 +72,12 @@ def split_emails(messages, size, limit, cap):
     return batches
 
 
-def run(messages, question, params, render, generate, progress, stream, system=SYSTEM):
+def run(messages, question, params, render, generate, progress, stream, system=SYSTEM, steps=None):
     """render -> (prompt, token count); generate(prompt, output limit) yields text."""
     messages = [message | {'source': message.get('source', index)} for index, message in enumerate(messages, 1)]
     limit, cap = params['max_input_tokens'], params['max_tasks']
     done, total = 0, 1
+    steps = steps or Steps()
 
     def prompt_for(items, mode):
         if mode == 'direct':
@@ -85,11 +87,12 @@ def run(messages, question, params, render, generate, progress, stream, system=S
         return render(system + ' ' + COMBINE,
                       'Question: ' + question + '\nEvidence notes (JSON):\n' + json.dumps(items, ensure_ascii=False))
 
-    def task(items, mode, final=False):
+    def task(items, mode, identifier, final=False):
         nonlocal done
         prompt, count = prompt_for(items, mode)
         if count > limit:
             raise TaskError('Task exceeds the input budget. Increase input tokens.')
+        steps.set(identifier, 'running')
         progress(done, total, 'Answering' if final else 'Extracting evidence' if mode == 'extract' else 'Combining evidence')
         output = []
         # Short notes ensure the reduction can shrink. Final output uses the user's limit.
@@ -100,24 +103,28 @@ def run(messages, question, params, render, generate, progress, stream, system=S
             else:
                 output.append(text)
         done += 1
+        steps.set(identifier, 'done')
         progress(done, total, 'Complete' if final else 'Evidence ready')
         return ''.join(output)
 
     if prompt_for(messages, 'direct')[1] <= limit:
-        task(messages, 'direct', final=True)
+        identifier = steps.add('answer_selected', [item['source'] for item in messages])
+        task(messages, 'direct', identifier, final=True)
         return
     batches = split_emails(messages, lambda items: prompt_for(items, 'extract')[1], limit, cap - 1)
     total = len(batches) + 1  # Reserve a final synthesis task.
     if total > cap:
         raise TaskError('Selection exceeds the maximum task count. Select fewer emails or adjust the limits.')
+    identifiers = [steps.add('question_extract', [item['source'] for item in batch]) for batch in batches]
+    final_step = steps.add('answer_combine')
     progress(0, total, 'Email batches created; final synthesis reserved')
     notes = [{'source_ids': sorted({item['id'] for item in batch}),
               'source_numbers': sorted({item['source'] for item in batch}),
-              'evidence': task(batch, 'extract')} for batch in batches]
+              'evidence': task(batch, 'extract', identifier)} for batch, identifier in zip(batches, identifiers)]
     while True:
         groups = pack(notes, lambda items: prompt_for(items, 'combine')[1], limit)
         if len(groups) == 1:
-            task(groups[0], 'combine', final=True)
+            task(groups[0], 'combine', final_step, final=True)
             return
         if len(groups) >= len(notes):
             raise TaskError('Evidence cannot fit the synthesis budget. Increase input tokens or select fewer emails.')
@@ -125,6 +132,9 @@ def run(messages, question, params, render, generate, progress, stream, system=S
         if total > cap:
             raise TaskError('Synthesis would exceed the maximum task count. Increase the limit or select fewer emails.')
         progress(done, total, 'Additional evidence-combination tasks created')
+        identifiers = [steps.add('evidence_combine',
+                                 [number for note in group for number in note['source_numbers']], before=final_step)
+                       for group in groups]
         notes = [{'source_ids': sorted({identifier for note in group for identifier in note['source_ids']}),
                   'source_numbers': sorted({number for note in group for number in note['source_numbers']}),
-                  'evidence': task(group, 'combine')} for group in groups]
+                  'evidence': task(group, 'combine', identifier)} for group, identifier in zip(groups, identifiers)]

@@ -112,7 +112,9 @@ class SelectionTests(unittest.TestCase):
                       patch.object(window.runtime, 'load') as send):
                     window.followup_button.click()
                 request = send.call_args.kwargs['request']
-                self.assertIn('Previous summary [1]', request['question'])
+                self.assertEqual('Previous summary [1]', request['previous']['answer'])
+                self.assertNotIn('Previous summary [1]', request['question'])
+                self.assertTrue(request['follow_up'])
                 self.assertEqual({mail['id'] for mail in request['emails']}, {'selected-one', 'selected-two'})
                 window.inference_event({'kind': 'text', 'text': 'Explanation [1]'})
                 window.inference_event({'kind': 'progress', 'text': 'Complete', 'completed': 1, 'total': 1})

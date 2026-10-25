@@ -7,7 +7,8 @@ Build a small desktop application in reviewable steps. This is a plan, not a lis
 - [x] Keep emails and metadata only in RAM; every launch starts empty.
 - [x] Clear session mail on disconnect, account change, and application exit.
 - [x] Remove legacy email database files at startup; never load them.
-- [ ] Keep future summaries, search indexes, and fetch coverage in RAM too.
+- [x] Keep summaries, conversations, and BM25 working data in RAM.
+- [ ] Track RAM-only fetch coverage.
 
 ## Working rules
 
@@ -102,6 +103,7 @@ Initial preset: [mlx-community/Qwen3.5-4B-MLX-4bit](https://huggingface.co/mlx-c
 - [x] Check offline MLX/GGUF warm reuse and request-cache clearing on macOS with synthetic messages.
 - [x] Show explicit loaded/unloaded state, worker peak RAM, and MLX allocator memory; distinguish historical measurements.
 - [x] Report actual LLM calls separately from tasks; show end-to-end elapsed seconds.
+- [x] Show a compact live checklist of operation purposes and source groups, with pending/running/done/failure/stop states; distinguish local steps from LLM-call counts, expose BM25 use/non-use, and retain the checklist/search status in RAM-only message history.
 - [x] Raise the Qwen preset output budget to 2,048, migrate old 512 defaults, and mark token-limit cutoffs as partial.
 - [x] Show a qualified full-attention KV-cache growth illustration; do not imply an exact total-RAM prediction.
 
@@ -109,7 +111,11 @@ Initial preset: [mlx-community/Qwen3.5-4B-MLX-4bit](https://huggingface.co/mlx-c
 
 ## 7. Email assistance: bounded workflows
 
-- [x] Add Follow up using the previous answer/request and its original source emails in RAM.
+- [x] Add RAM-only sessions/messages with selectable history; clear on disconnect/account change/exit and restore nothing on launch.
+- [x] Follow up from the displayed previous answer/request, without replaying all source bodies; retain source snapshots for explicit bounded lookup.
+- [x] Add a small JSON router: previous answer, one email by ID, or BM25 passages; at most two LLM calls and one local lookup per follow-up.
+- [x] Stream short chat answers with a 512-token ceiling; retain the full configured budget for summaries/drafts.
+- [x] Supply only top matching excerpts for BM25-assisted Ask emails, not all searched email bodies.
 - [x] Add optional model-planned BM25 search restricted to scoped mail; count the extra call and validate the tool schema.
 - [x] Add a visible, saved Skip Promotions fetch filter, initially enabled.
 
@@ -127,13 +133,23 @@ Initial preset: [mlx-community/Qwen3.5-4B-MLX-4bit](https://huggingface.co/mlx-c
 - [x] Reuse one warm worker between answers; clear request caches and unload manually or after five idle minutes.
 
 - [x] Add Summarize for selected emails with optional RAM-only instructions.
-- [x] Summarize emails independently and attach source/subject/sender in application code; isolate oversized-email reduction and strip generated citation labels.
+- [x] Batch emails by input/output budget; validate keyed records and exact source quotations.
+- [x] Render batch cards incrementally and place an extractive, source-bound overview first.
+- [x] Use flat summary records selecting numbered original evidence passages; omit URL tokens from summary context, retain valid neighboring records, and retry only missing/invalid/empty findings once within budget.
+- [x] Give answers and work steps full-area tabs, put the question field below output, fold email preview during inference, and make the model sidebar optional. Click failed steps for RAM-only failure details.
+- [x] Add RAM-only, per-message summary diagnostics: fixed rejection/classification/retry codes, source ordinals, call counts, input-token counts, output-character counts, and call timings; cap records and allow explicit content-free copying without a log file.
+- [x] Test that diagnostic events/reports exclude mail content, identifiers, prompts and raw model output; preserve diagnostics across message navigation and clear with sessions.
+- [x] Show real recipient role/counts, CC, timestamp, and attachment count separately from model-estimated mail type.
+- [x] Add source-bound Reply / Reply all / Forward with editable RAM-only drafts.
+- [x] Add opt-in Gmail send permission, recipient/body confirmation, threaded replies, and no ambiguous automatic retry.
+- [ ] Verify live Gmail send authorization/delivery manually; automated checks use mocks only.
+- [ ] Add attachment forwarding and voice input in later increments.
 - [x] Split oversized selections into token-budgeted evidence tasks and hierarchical synthesis; show created/completed counts and enforce a call limit.
 - [ ] Evaluate summary omissions, source references, and conflicts across batch boundaries.
 - [ ] Summarize a conversation chronologically, limiting repeated quoted content and respecting the input budget.
 - [ ] Translate natural-language search into a small validated structure: sender/name, recipient, subject, date range, and terms.
 - [ ] Display interpreted filters so the user can inspect or correct them. Ask for clarification when names or dates are ambiguous.
-- [ ] Execute parameterized local queries in application code; the model never executes SQL, shell commands, or tools.
+- [ ] Execute parameterized local queries in application code; the model never executes SQL or shell commands; application code validates and runs only allowed read-only mail lookups.
 - [ ] Answer questions from retrieved mail with source references and an explicit no-evidence response when appropriate.
 - [ ] Show local search coverage; do not imply the entire Gmail mailbox was searched.
 
@@ -156,10 +172,19 @@ Start with approximately 20–30 synthetic messages across a few threads and 10 
 | 9 | Answer an unsupported question | Explicit lack of evidence; downloaded scope acknowledged |
 | 10 | Handle Turkish/English text and malicious instructions inside mail | Correct retrieval; content cannot grant authority or justify unsupported claims |
 
-- [ ] Record query, expected IDs/facts, model revision, runtime, generation settings, and result.
+- [ ] Record query, expected IDs/facts, model revision, runtime, generation settings, result, and structured diagnostic codes in synthetic benchmark runs. Never persist private-mail traces.
 - [ ] Score retrieval by expected IDs and filter correctness; manually review summaries for omissions and unsupported claims.
 - [ ] Record end-to-end latency and peak memory on the actual Mac. Set budgets from measurements.
 - [ ] Keep date-range, repeated-fetch, deletion, and cache-clearing checks separate from model quality evaluations.
+
+### Repeatable model comparison benchmark
+
+- [ ] Add a small CLI benchmark runner using the same versioned synthetic fixtures, expected answers, and prompt/workflow versions for every candidate model; support local MLX and GGUF without another framework.
+- [ ] Track accuracy per case: retrieval IDs, required facts, unsupported claims, source attribution, dates/amounts/statuses, selected response language, appropriate no-evidence answers, and follow-up lookup decisions. Keep human factual review separate from deterministic checks; language compliance alone is not factual accuracy.
+- [ ] Record end-to-end latency, time to first visible answer token (including routing/retrieval), model load time, and actual LLM-call count. Measure cold and warm runs separately; include failures/timeouts and run counts in reports.
+- [ ] Track actual input/output token counts and generation throughput (tokens/s) per LLM call, with the tokenizer/runtime identified. Define decode tokens/s from generated tokens and measured decode duration; report prompt/prefill throughput separately when available. Do not substitute characters/4, words/s, or output tokens divided by full workflow latency for decode tokens/s; mark unavailable runtime metrics explicitly.
+- [ ] Record model ID/revision, quantization, runtime/version, inference parameters/seed where supported, device/OS, and peak RAM so comparisons are reproducible. Repeat cases and report accuracy plus median/tail latency and throughput with sample counts.
+- [ ] Produce simple JSON results and a Markdown comparison table against the current baseline before changing the preset. Choose on accuracy and acceptable latency/memory together, not speed alone. Use only synthetic fixtures in committed reports; keep private-mail evaluation inputs/results out of Git.
 
 ## 9. Later compatibility and release work
 
@@ -179,4 +204,12 @@ Start with approximately 20–30 synthetic messages across a few threads and 10 
 
 ## Keep deferred
 
-No Docker distribution, separate application SSO, automatic fetching, sending/deleting provider mail, attachments, calendars, notifications, ranking, dashboards, vector database, plugin system, or agent framework. Revisit only when a demonstrated need warrants the additional code.
+No Docker distribution, separate application SSO, automatic fetching, automatic sending/deleting provider mail, attachment-content processing, calendars, notifications, ranking, dashboards, vector database, plugin system, or agent framework. Revisit only when a demonstrated need warrants the additional code.
+
+
+## Current increment validation
+
+- [x] Synthetic model check: 20 emails, 20 quote-checked cards, five calls on this Mac.
+- [x] Local Turkish reply drafting without a send grant or delivery.
+- [x] Mocked send tests: canceled approval makes no call, approved payload stays frozen, success prevents duplicate submission, ambiguous failure is not retried.
+- [ ] Broader summary accuracy, adversarial mail, real Gmail delivery, and native Windows checks remain required before broad use.

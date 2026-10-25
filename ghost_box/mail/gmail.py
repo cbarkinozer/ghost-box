@@ -1,4 +1,4 @@
-"""Read-only Gmail sign-in. Tokens live in the OS credential store."""
+"""Gmail fetching and explicitly enabled sending. Tokens live in the OS credential store."""
 
 import json
 import sys
@@ -14,6 +14,7 @@ from google.auth.exceptions import RefreshError
 from .text import decode_message
 
 SCOPE = "https://www.googleapis.com/auth/gmail.readonly"
+SEND_SCOPE = "https://www.googleapis.com/auth/gmail.send"
 SERVICE = "ghost-box"
 ACCOUNT = "gmail"
 CLIENT_FILE = Path(__file__).resolve().parents[2] / "oauth-client.json"
@@ -60,7 +61,7 @@ def saved_account() -> str:
     return json.loads(saved)["email"] if saved else ""
 
 
-def connect(client_file: str | Path = CLIENT_FILE) -> str:
+def connect(client_file: str | Path = CLIENT_FILE, allow_send=False, expected_account=None) -> str:
     with open(client_file, encoding="utf-8") as file:
         config = json.load(file)
     installed = config.get("installed", {})
@@ -70,8 +71,9 @@ def connect(client_file: str | Path = CLIENT_FILE) -> str:
     ):
         raise ValueError("This build requires an unmodified Google Desktop OAuth configuration.")
 
+    requested = [SCOPE, SEND_SCOPE] if allow_send else [SCOPE]
     flow = InstalledAppFlow.from_client_config(
-        config, scopes=[SCOPE], autogenerate_code_verifier=True
+        config, scopes=requested, autogenerate_code_verifier=True
     )
     flow.fetch_token = partial(flow.fetch_token, timeout=20)
     stage = "Google authorization / token exchange"
@@ -91,10 +93,16 @@ def connect(client_file: str | Path = CLIENT_FILE) -> str:
             )
             check_profile_response(response)
             email = response.json()["emailAddress"]
+        if expected_account and email.casefold() != expected_account.casefold():
+            raise AccountError('Sign in with the same Gmail account; the saved account was not changed.')
+        granted = getattr(credentials, 'granted_scopes', None)
+        granted = list(granted) if isinstance(granted, (list, tuple, set)) else requested
+        if not set(requested).issubset(granted):
+            raise AccountError('Required Gmail permissions were not granted. The saved account was not changed.')
         stage = "OS credential storage"
         credential_store().set_password(
             SERVICE, ACCOUNT,
-            json.dumps({"email": email, "credentials": json.loads(credentials.to_json())}),
+            json.dumps({"email": email, "credentials": json.loads(credentials.to_json()), "scopes": granted}),
         )
         return email
     except AccountError:
@@ -137,19 +145,7 @@ def fetch(first, last, mailbox, account, progress, cancelled, exclude_promotions
     count = 0
     pending = []
     try:
-        store = credential_store()
-        saved = json.loads(store.get_password(SERVICE, ACCOUNT) or "{}")
-        if saved.get("email") != account:
-            raise AccountError("Your saved Gmail account changed. Reconnect before fetching.")
-        credentials = Credentials.from_authorized_user_info(saved["credentials"], [SCOPE])
-        if not credentials.valid:
-            request = Request()
-            try:
-                credentials.refresh(partial(request, timeout=20))
-            finally:
-                request.session.close()
-            saved["credentials"] = json.loads(credentials.to_json())
-            store.set_password(SERVICE, ACCOUNT, json.dumps(saved))
+        credentials = credentials_for(account)
         with AuthorizedSession(credentials) as session:
             token = None
             while not cancelled():
@@ -196,3 +192,61 @@ def fetch(first, last, mailbox, account, progress, cancelled, exclude_promotions
             f"Fetch stopped after {count} messages ({detail}). "
             "Previous session emails were kept; this incomplete fetch was discarded."
         ) from None
+
+
+def can_send(account):
+    saved = json.loads(credential_store().get_password(SERVICE, ACCOUNT) or '{}')
+    return saved.get('email', '').casefold() == account.casefold() and SEND_SCOPE in saved.get('scopes', [])
+
+
+def credentials_for(account, sending=False):
+    store = credential_store()
+    saved = json.loads(store.get_password(SERVICE, ACCOUNT) or '{}')
+    if saved.get('email', '').casefold() != account.casefold():
+        raise AccountError('Your saved Gmail account changed. Reconnect before continuing.')
+    scopes = saved.get('scopes', [SCOPE])
+    if sending and SEND_SCOPE not in scopes:
+        raise AccountError('Sending permission is not enabled. Use Enable sending and approve Gmail send access.')
+    credentials = Credentials.from_authorized_user_info(saved['credentials'], scopes)
+    if not credentials.valid:
+        request = Request()
+        try:
+            credentials.refresh(partial(request, timeout=20))
+        finally:
+            request.session.close()
+        saved['credentials'] = json.loads(credentials.to_json())
+        store.set_password(SERVICE, ACCOUNT, json.dumps(saved))
+    return credentials
+
+
+class SendError(AccountError):
+    def __init__(self, message, uncertain=False):
+        super().__init__(message)
+        self.uncertain = uncertain
+
+
+def send(account, payload):
+    """Called only with the immutable payload approved in the compose dialog. No retry."""
+    attempted = False
+    try:
+        credentials = credentials_for(account, sending=True)
+        with AuthorizedSession(credentials, max_refresh_attempts=0) as session:
+            attempted = True
+            response = session.post('https://gmail.googleapis.com/gmail/v1/users/me/messages/send',
+                                    json=payload, timeout=20)
+            if response.status_code >= 500:
+                raise SendError('Send result is unconfirmed. Check Gmail Sent before sending again.', uncertain=True)
+            if response.status_code >= 400:
+                raise SendError(f'Gmail rejected sending (HTTP {response.status_code}). Check permission, recipients, and organization policy.')
+            identifier = response.json().get('id')
+            if not identifier:
+                raise SendError('Send result is unconfirmed. Check Gmail Sent before sending again.', uncertain=True)
+            return identifier
+    except AccountError:
+        raise
+    except RefreshError:
+        raise SendError('Gmail access expired or was revoked. Reconnect before sending.') from None
+    except Exception:
+        if not attempted:
+            raise SendError('Could not authenticate for sending. No email was sent; reconnect and try again.') from None
+        raise SendError('Send result is unconfirmed. Check Gmail Sent before sending again; no retry was made.', uncertain=True) from None

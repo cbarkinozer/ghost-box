@@ -2,7 +2,7 @@
 
 from html import escape
 import re
-from urllib.parse import quote, unquote
+from urllib.parse import quote, unquote, urlsplit, parse_qs
 
 from PySide6.QtCore import Signal, Qt
 from PySide6.QtGui import QImage, QTextDocument
@@ -20,6 +20,7 @@ class LocalDocument(QTextDocument):
 
 class AnswerView(QTextBrowser):
     source_clicked = Signal(str)
+    compose_clicked = Signal(str, str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -41,6 +42,13 @@ class AnswerView(QTextBrowser):
         return identifier if identifier in self.sources else None
 
     def open_source(self, url):
+        if url.scheme() == 'ghostreply':
+            parsed = urlsplit(bytes(url.toEncoded()).decode())
+            identifier = unquote(parsed.path)
+            mode = parse_qs(parsed.query).get('mode', [''])[0]
+            if identifier in self.sources and mode in ('reply', 'reply_all', 'forward'):
+                self.compose_clicked.emit(identifier, mode)
+            return
         identifier = self.source_id(url)
         if identifier is not None:
             self.source_clicked.emit(identifier)
@@ -50,7 +58,8 @@ class AnswerView(QTextBrowser):
         message = self.sources.get(identifier)
         self.setToolTip('<qt>' + escape(message['subject']) + '<br>' + escape(message['sender']) + '</qt>' if message else '')
 
-    def render(self, markdown, link_citations=True):
+    def render(self, markdown, link_citations=True, scroll_to_top=True):
+        position = self.verticalScrollBar().value()
         numbers = {identifier: index for index, identifier in enumerate(self.sources, 1)}
         aliases = {str(number): identifier for identifier, number in numbers.items()} | {identifier: identifier for identifier in numbers}
 
@@ -74,7 +83,7 @@ class AnswerView(QTextBrowser):
             markdown = re.sub(pattern, link, markdown, flags=re.IGNORECASE)
         self.document().setMarkdown(markdown, QTextDocument.MarkdownFeature.MarkdownDialectGitHub
                                     | QTextDocument.MarkdownFeature.MarkdownNoHTML)
-        self.verticalScrollBar().setValue(0)
+        self.verticalScrollBar().setValue(0 if scroll_to_top else position)
 
     def clear(self):
         super().clear()

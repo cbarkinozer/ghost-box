@@ -47,6 +47,17 @@ class AnswerTests(unittest.TestCase):
         view.clear()
         self.assertFalse(view.sources)
 
+    def test_compose_links_only_open_known_sources_and_modes(self):
+        view = AnswerView()
+        view.sources = {'one': {'subject': 'Test', 'sender': 'Test'}}
+        requests = []
+        view.compose_clicked.connect(lambda identifier,mode: requests.append((identifier,mode)))
+        view.open_source(QUrl('ghostreply:one?mode=reply_all'))
+        self.assertEqual(requests, [('one','reply_all')])
+        for target in ('ghostreply:unknown?mode=reply', 'ghostreply:one?mode=send', 'https://example.com'):
+            view.open_source(QUrl(target))
+        self.assertEqual(len(requests),1)
+
     def test_localized_citation_formats_and_unknown_numbers(self):
         view = AnswerView()
         view.sources = {'first': {'subject': 'First', 'sender': 'Test'},

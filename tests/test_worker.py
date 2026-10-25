@@ -62,3 +62,22 @@ class WorkerTests(unittest.TestCase):
                 final_progress = [event for event in events if event['kind'] == 'progress'][-1]
                 self.assertEqual((final_progress['completed'], final_progress['total']), (2, 2))
                 self.assertTrue(any(event['kind'] == 'search' and '1 matches in 1 scoped' in event['text'] for event in events))
+
+    def test_selected_language_is_in_question_and_draft_system_prompts(self):
+        for draft in (False, True):
+            for language in ('Turkish', 'English'):
+                with self.subTest(draft=draft, language=language):
+                    backend = Backend()
+                    original_render = backend.render
+                    systems = []
+                    def render(system, user):
+                        systems.append(system)
+                        return original_render(system, user)
+                    backend.render = render
+                    request = dict(emails=[dict(id='one',timestamp=1,sender='Test',recipients='Test',
+                                                subject='English subject',body='English email contents.')],
+                                   question='Explain this.',language=language,draft=draft)
+                    with patch('ghost_box.models.worker.emit'):
+                        workflow(request, backend, dict(max_input_tokens=1024,max_output_tokens=64,max_tasks=8))
+                    self.assertTrue(systems)
+                    self.assertTrue(all(f'Default response language: {language}' in system for system in systems))

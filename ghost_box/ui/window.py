@@ -11,7 +11,7 @@ import stat
 import sys
 from datetime import datetime
 
-from PySide6.QtCore import QDate, QDateTime, QItemSelectionModel, QLibraryInfo, QSettings, QStandardPaths, QTime, Qt, QThread, Signal
+from PySide6.QtCore import QDate, QDateTime, QItemSelectionModel, QLibraryInfo, QSettings, QStandardPaths, QTime, Qt
 from PySide6.QtGui import QFont, QFontDatabase, QFontInfo
 from PySide6.QtWidgets import (
     QApplication, QLabel, QMainWindow, QMessageBox, QPushButton,
@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
     QAbstractItemView, QHBoxLayout, QVBoxLayout, QWidget,
     QProgressBar,
     QComboBox,
-    QCheckBox,
+    QCheckBox, QTabWidget,
 )
 
 from ..mail import gmail
@@ -27,6 +27,13 @@ from ..mail import store as mail_store
 from .caspy import ModelPanel
 from ..mail.context import SYSTEM, SUMMARY, build_context, with_language
 from .answer_view import AnswerView
+from .tasks import AccountTask
+from .compose import ComposeDialog
+from .history import History
+from .diagnostics import DiagnosticsDialog
+from .work_steps import WorkSteps
+from ..mail.diagnostics import safe_record
+from ..mail.metadata import details
 from ..models.session import ModelSession
 
 
@@ -47,34 +54,6 @@ def prepare_qt_plugins():
             os.chflags(path, flags & ~stat.UF_HIDDEN)
 
 
-class AccountTask(QThread):
-    succeeded = Signal(object)
-    failed = Signal(str)
-    progress = Signal(str)
-
-    def __init__(self, operation, parent):
-        super().__init__(parent)
-        self.operation = operation
-
-    def run(self):
-        try:
-            self.succeeded.emit(self.operation())
-        except gmail.AccountError as error:
-            self.failed.emit(str(error))
-        except FileNotFoundError:
-            self.failed.emit(
-                "Google sign-in is not configured in this build. "
-                "Please ask the Ghost-box maintainer for a configured build."
-            )
-        except Exception:
-            # OAuth exceptions can contain authorization URLs or token responses.
-            self.failed.emit(
-                "Account operation failed. Check your internet connection and "
-                "OS credential-store permissions. Your organization may also restrict access. "
-                "If sign-in was cancelled or timed out, try again."
-            )
-
-
 class Window(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -83,6 +62,7 @@ class Window(QMainWindow):
         self.setMinimumSize(1000, 700)
         self.task = None
         self.answer_running = False
+        self.history = History()
         self.summary_mode = False
         self.last_memory = ''
         self.runtime = ModelSession(self)
@@ -91,6 +71,9 @@ class Window(QMainWindow):
         self.request_count = 0
         self.answer_question = ''
         self.answer_is_summary = False
+        self.summary_cards = []
+        self.diagnostic_rows = []
+        self.diagnostics_dialog = None
         self.answer_elapsed = 0
         self.answer_truncated = False
         self.preferences = QSettings('Ghost-box', 'Ghost-box')
@@ -120,6 +103,14 @@ class Window(QMainWindow):
         self.language.setCurrentIndex(max(0, self.language.findData(saved_language)))
         self.language.setToolTip('Default language for answers and summaries. Explicit language instructions can override it.')
         toolbar.addWidget(self.language)
+        diagnostics_button = QPushButton('Diagnostics')
+        diagnostics_button.setToolTip('Content-free summary failure reasons and timings, kept only in RAM.')
+        diagnostics_button.clicked.connect(self.show_diagnostics)
+        toolbar.addWidget(diagnostics_button)
+        self.model_toggle = QPushButton('👻 Caspy')
+        self.model_toggle.setCheckable(True)
+        self.model_toggle.setChecked(True)
+        toolbar.addWidget(self.model_toggle)
 
         dates = QToolBar("Fetch")
         dates.setMovable(False)
@@ -177,26 +168,61 @@ class Window(QMainWindow):
         reading_layout.setContentsMargins(0, 0, 0, 0)
         preview = QWidget()
         preview_layout = QVBoxLayout(preview)
-        preview_layout.addWidget(QLabel("<b>Email preview</b>"))
+        reply_actions = QHBoxLayout()
+        self.preview_toggle = QPushButton('Email preview ▸')
+        self.preview_toggle.setCheckable(True)
+        self.preview_toggle.setChecked(False)
+        self.reader.hide()
+        self.preview_toggle.toggled.connect(self.reader.setVisible)
+        self.preview_toggle.toggled.connect(lambda visible: self.preview_toggle.setText('Email preview ▾' if visible else 'Email preview ▸'))
+        reply_actions.addWidget(self.preview_toggle)
+        reply_actions.addStretch()
+        self.preview_actions = []
+        for label, mode in (('Reply', 'reply'), ('Reply all', 'reply_all'), ('Forward', 'forward')):
+            button = QPushButton(label)
+            button.setEnabled(False)
+            button.clicked.connect(lambda checked=False, action=mode: self.compose_current(action))
+            reply_actions.addWidget(button)
+            self.preview_actions.append(button)
+        preview_layout.addLayout(reply_actions)
         preview_layout.addWidget(self.reader)
-        preview.setMinimumHeight(140)
+        preview.setMinimumHeight(0)
         conversation = QWidget()
         conversation.setMinimumHeight(230)
         conversation_layout = QVBoxLayout(conversation)
-        conversation_layout.addWidget(QLabel("<b>Ask 👻 Caspy</b>"))
+        history_row = QHBoxLayout()
+        self.session_picker = QComboBox()
+        self.session_picker.setMinimumContentsLength(12)
+        self.session_picker.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.session_picker.setPlaceholderText('Sessions · RAM only')
+        self.session_picker.setToolTip('Ask emails or Summarize starts a session. All sessions stay in RAM until cleared or closed.')
+        self.message_picker = QComboBox()
+        self.message_picker.setMinimumContentsLength(12)
+        self.message_picker.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.message_picker.setPlaceholderText('Messages')
+        self.message_picker.setToolTip('Revisit a message. Follow up continues the displayed message, not the whole transcript.')
+        self.session_picker.currentIndexChanged.connect(self.select_session)
+        self.message_picker.currentIndexChanged.connect(self.select_history_message)
+        history_row.addWidget(self.session_picker, 1)
+        history_row.addWidget(self.message_picker, 1)
+        self.clear_sessions = QPushButton('Clear sessions')
+        self.clear_sessions.clicked.connect(self.clear_history)
+        history_row.addWidget(self.clear_sessions)
+        conversation_layout.addLayout(history_row)
         self.scope_label = QLabel()
         self.scope_label.setWordWrap(True)
         self.scope_label.setToolTip("Includes selected email headers, question, and instructions. Approximately 4 characters per token; actual token counts vary.")
-        conversation_layout.addWidget(self.scope_label)
+        scope_row = QHBoxLayout()
+        scope_row.addWidget(self.scope_label, 1)
         self.question = QPlainTextEdit()
         self.question.setFont(reading_font)
         self.question.setPlaceholderText("Question for Ask, or optional instructions for Summarize…")
         self.question.setMaximumHeight(56)
         self.question.textChanged.connect(self.scope_changed)
-        conversation_layout.addWidget(self.question)
         self.search_enabled = QCheckBox('Use BM25 search for questions')
-        self.search_enabled.setToolTip('One extra model call creates a keyword query. Search stays within the question’s email scope. Summarize always reads all selected mail.')
-        conversation_layout.addWidget(self.search_enabled)
+        self.search_enabled.setToolTip('For Ask emails: one extra call searches selected mail and supplies only matching excerpts. Follow up chooses a local lookup only when needed. Summarize reads all selected mail.')
+        scope_row.addWidget(self.search_enabled)
+        conversation_layout.addLayout(scope_row)
         actions = QHBoxLayout()
         self.ask_button = QPushButton("Ask emails")
         self.ask_button.clicked.connect(self.ask_selected)
@@ -206,14 +232,13 @@ class Window(QMainWindow):
         self.summary_button.clicked.connect(lambda: self.ask_selected(summarize=True))
         actions.addWidget(self.summary_button)
         self.followup_button = QPushButton('Follow up')
-        self.followup_button.setToolTip('Type a question above, then follow up on the previous answer using its original emails. Click to focus the input. Last answer/request only.')
+        self.followup_button.setToolTip('Continue the displayed message, not the full mailbox. Original mail is read only if the model requests one local lookup. Click to focus the input.')
         self.followup_button.clicked.connect(lambda: self.ask_selected(follow_up=True))
         actions.addWidget(self.followup_button)
         self.stop_button = QPushButton("Stop")
         self.stop_button.setEnabled(False)
         self.stop_button.clicked.connect(self.stop_inference)
         actions.addWidget(self.stop_button)
-        conversation_layout.addLayout(actions)
         self.inference_status = QLabel("Select emails and enter a question to begin.")
         self.inference_status.setWordWrap(True)
         self.inference_status.setTextFormat(Qt.TextFormat.PlainText)
@@ -224,9 +249,10 @@ class Window(QMainWindow):
         self.search_status.hide()
         conversation_layout.addWidget(self.search_status)
         self.task_progress = QProgressBar()
-        self.task_progress.setFormat('%v / %m tasks complete')
+        self.task_progress.setFormat('%v / %m LLM calls complete')
         self.task_progress.hide()
         conversation_layout.addWidget(self.task_progress)
+        self.work_steps = WorkSteps()
         self.answer_scope = QLabel()
         self.answer_scope.setWordWrap(True)
         self.answer_scope.setTextFormat(Qt.TextFormat.PlainText)
@@ -236,13 +262,22 @@ class Window(QMainWindow):
         self.answer.document().setDefaultFont(reading_font)
         self.answer.setMinimumHeight(120)
         self.answer.source_clicked.connect(self.preview_source)
+        self.answer.compose_clicked.connect(self.open_composer)
         self.answer.setPlaceholderText("Answers stay in RAM. Select multiple emails with Cmd/Ctrl-click or Shift-click.")
-        conversation_layout.addWidget(self.answer, 1)
+        self.output_tabs = QTabWidget()
+        self.output_tabs.addTab(self.answer, 'Answer')
+        self.output_tabs.addTab(self.work_steps, 'Work steps')
+        self.work_steps.changed.connect(self.steps_changed)
+        conversation_layout.addWidget(self.output_tabs, 1)
+        conversation_layout.addWidget(self.question)
+        conversation_layout.addLayout(actions)
         reading_split = QSplitter(Qt.Orientation.Vertical)
+        self.reading_split = reading_split
         reading_split.setChildrenCollapsible(False)
         reading_split.addWidget(preview)
         reading_split.addWidget(conversation)
-        reading_split.setSizes([180, 480])
+        reading_split.setSizes([48, 640])
+        self.preview_toggle.toggled.connect(lambda visible: reading_split.setSizes([140, 540] if visible else [38, 640]))
         reading_layout.addWidget(reading_split)
         content = QSplitter()
         content.setChildrenCollapsible(False)
@@ -251,6 +286,7 @@ class Window(QMainWindow):
         self.caspy = ModelPanel()
         self.caspy.setMinimumWidth(240)
         self.caspy.setMaximumWidth(280)
+        self.model_toggle.toggled.connect(self.caspy.setVisible)
         self.caspy.selector.currentIndexChanged.connect(self.model_selection_changed)
         self.caspy.parameters_changed.connect(self.scope_changed)
         self.caspy.load_button.clicked.connect(self.load_model)
@@ -269,7 +305,9 @@ class Window(QMainWindow):
         self.start(gmail.saved_account)
 
     def start(self, operation, success=None):
-        self.invalidate_answer()
+        self.save_history_message()
+        if self.answer_running:
+            self.stop_inference()
         self.connect_button.setEnabled(False)
         self.disconnect_button.setEnabled(False)
         self.fetch_button.setEnabled(False)
@@ -297,10 +335,14 @@ class Window(QMainWindow):
             f"{len(messages)} emails selected · {characters:,} input characters · ~{math.ceil(characters / 4):,} tokens"
         )
         self.ask_button.setEnabled(bool(messages and self.question.toPlainText().strip())
-                                   and self.task is None and not self.answer_running and self.runtime.state != 'unloading')
-        self.summary_button.setEnabled(bool(messages) and self.task is None and not self.answer_running and self.runtime.state != 'unloading')
+                                   and self.task is None and not self.answer_running and not self.runtime.busy and self.runtime.state != 'unloading')
+        self.summary_button.setEnabled(bool(messages) and self.task is None and not self.answer_running and not self.runtime.busy and self.runtime.state != 'unloading')
         self.followup_button.setEnabled(bool(self.answer_markdown and self.answer.sources)
-                                        and self.task is None and not self.answer_running and self.runtime.state != 'unloading')
+                                        and self.task is None and not self.answer_running and not self.runtime.busy and self.runtime.state != 'unloading')
+        for button in self.preview_actions:
+            button.setEnabled(bool(self.mail_list.currentItem() and self.email) and self.task is None)
+        for control in (self.session_picker, self.message_picker, self.clear_sessions):
+            control.setEnabled(not self.answer_running and not self.runtime.busy and self.task is None)
         self.update_model_buttons()
         if self.answer_description:
             changed = {message['id'] for message in messages} != set(self.answer.sources)
@@ -333,6 +375,24 @@ class Window(QMainWindow):
         self.inference_status.setText(text)
         self.statusBar().showMessage(text)
 
+    def steps_changed(self):
+        self.output_tabs.setTabText(1, self.work_steps.title)
+
+    def refresh_diagnostics(self):
+        if self.diagnostics_dialog is not None:
+            self.diagnostics_dialog.refresh(self.diagnostic_rows)
+
+    def show_diagnostics(self):
+        dialog = DiagnosticsDialog(self)
+        self.diagnostics_dialog = dialog
+        dialog.refresh(self.diagnostic_rows)
+        try:
+            dialog.exec()
+        finally:
+            dialog.text.clear()
+            self.diagnostics_dialog = None
+            dialog.deleteLater()
+
     def invalidate_answer(self):
         if self.answer_running:
             self.stop_inference()
@@ -342,14 +402,97 @@ class Window(QMainWindow):
         self.request_count = 0
         self.answer_question = ''
         self.answer_is_summary = False
+        self.summary_cards = []
+        self.diagnostic_rows = []
+        self.refresh_diagnostics()
         self.answer_elapsed = 0
         self.answer_truncated = False
         self.search_status.clear()
         self.search_status.hide()
         self.answer_scope.clear()
         self.task_progress.hide()
+        self.work_steps.restore([], self.language.currentData())
+
+    def save_history_message(self):
+        if self.history.current is not None:
+            self.history.current.update(
+                markdown=self.answer_markdown, description=self.answer_description,
+                question=self.answer_question, summary=self.answer_is_summary,
+                cards=self.summary_cards, elapsed=self.answer_elapsed,
+                truncated=self.answer_truncated, requests=self.request_count,
+                sources=dict(self.answer.sources), diagnostics=list(self.diagnostic_rows),
+                steps=[dict(row) for row in self.work_steps.rows], steps_language=self.work_steps.language, steps_error=self.work_steps.error_text,
+                search_status=self.search_status.text())
+
+    def refresh_history_controls(self):
+        self.session_picker.blockSignals(True)
+        self.message_picker.blockSignals(True)
+        self.session_picker.clear()
+        for index, session in enumerate(self.history.sessions, 1):
+            self.session_picker.addItem(f'{index}. {session["title"]}')
+        self.session_picker.setCurrentIndex(self.history.session)
+        self.message_picker.clear()
+        if self.history.session >= 0:
+            for index, message in enumerate(self.history.sessions[self.history.session]['messages'], 1):
+                self.message_picker.addItem(f'{index}. {message["question"][:65]}')
+            self.message_picker.setCurrentIndex(self.history.message)
+        self.session_picker.blockSignals(False)
+        self.message_picker.blockSignals(False)
+
+    def display_history_message(self):
+        record = self.history.current
+        if record is None:
+            return
+        self.answer_markdown = record['markdown']
+        self.answer_description = record['description']
+        self.answer_question = record['question']
+        self.answer_is_summary = record['summary']
+        self.summary_cards = record['cards']
+        self.diagnostic_rows = list(record.get('diagnostics', []))
+        self.refresh_diagnostics()
+        self.answer_elapsed = record['elapsed']
+        self.answer_truncated = record['truncated']
+        self.request_count = record['requests']
+        self.answer.sources = dict(record['sources'])
+        self.work_steps.restore(record.get('steps', []), record.get('steps_language', 'English'), record.get('steps_error', ''))
+        self.answer.render(self.answer_markdown, link_citations=not self.answer_is_summary)
+        self.output_tabs.setCurrentIndex(0)
+        self.search_status.setText(record.get('search_status', ''))
+        self.search_status.setVisible(bool(self.search_status.text()))
+        self.task_progress.hide()
+        self.set_inference_status('Session message · RAM only')
+        self.refresh_history_controls()
+        self.update_scope()
+
+    def select_session(self, index):
+        if index < 0 or self.answer_running:
+            return
+        self.save_history_message()
+        self.history.select(index)
+        self.display_history_message()
+
+    def select_history_message(self, index):
+        if index < 0 or self.history.session < 0 or self.answer_running:
+            return
+        self.save_history_message()
+        self.history.select(self.history.session, index)
+        self.display_history_message()
+
+    def clear_history(self, checked=False, force=False):
+        if self.answer_running:
+            if not force:
+                return
+            self.stop_inference()
+            self.answer_running = False
+            self.stop_button.setEnabled(False)
+        self.history.clear()
+        self.invalidate_answer()
+        self.read_message(self.mail_list.currentItem())
+        self.refresh_history_controls()
+        self.update_scope()
 
     def preview_source(self, identifier):
+        self.preview_toggle.setChecked(True)
         for row in range(self.mail_list.count()):
             item = self.mail_list.item(row)
             if item.data(Qt.ItemDataRole.UserRole) == identifier:
@@ -358,6 +501,34 @@ class Window(QMainWindow):
                 self.mail_list.scrollToItem(item)
                 self.read_message(item)
                 return
+        message = self.answer.sources.get(identifier)
+        if message:
+            self.reader.setPlainText(f"Email ID: {identifier}\nFrom: {message['sender']}\n"
+                                     f"Subject: {message['subject']}\n\n{message['body']}")
+            self.statusBar().showMessage('Source from this conversation’s RAM snapshot.')
+
+    def compose_current(self, mode):
+        item = self.mail_list.currentItem()
+        if item:
+            self.open_composer(item.data(Qt.ItemDataRole.UserRole), mode)
+
+    def open_composer(self, identifier, mode):
+        if not self.email or self.task is not None:
+            self.statusBar().showMessage('Wait for the account operation and connect Gmail before composing.')
+            return
+        source = mail_store.message(self.mailbox, self.email, identifier)
+        if source is None:
+            source = self.answer.sources.get(identifier)
+        if source is None:
+            self.statusBar().showMessage('This source is no longer in the current mail session.')
+            return
+        try:
+            dialog = ComposeDialog(source, self.email, mode, self)
+        except ValueError as error:
+            QMessageBox.warning(self, 'Compose', str(error))
+            return
+        dialog.exec()
+        dialog.deleteLater()
 
     def model_configuration(self):
         folder = self.caspy.selected_folder()
@@ -388,14 +559,15 @@ class Window(QMainWindow):
         self.caspy.load_button.setText('Loaded' if matches and self.runtime.state == 'ready' else
                                        'Reload' if self.runtime.process is not None else 'Load')
         self.caspy.load_button.setEnabled(folder is not None and not self.answer_running
+                                         and not self.runtime.busy
                                          and self.runtime.state not in ('loading', 'unloading')
                                          and not (matches and self.runtime.state == 'ready'))
         self.caspy.unload_button.setEnabled(self.runtime.process is not None
-                                           and not self.answer_running and self.runtime.state != 'unloading')
+                                           and not self.answer_running and not self.runtime.busy and self.runtime.state != 'unloading')
 
     def load_model(self):
         configuration = self.model_configuration()
-        if configuration is not None and not self.answer_running:
+        if configuration is not None and not self.answer_running and not self.runtime.busy:
             self.runtime.load(*configuration)
 
     def model_selection_changed(self):
@@ -421,7 +593,7 @@ class Window(QMainWindow):
         self.update_scope()
 
     def ask_selected(self, summarize=False, follow_up=False):
-        if self.answer_running or self.task is not None or self.runtime.state == 'unloading':
+        if self.answer_running or self.runtime.busy or self.task is not None or self.runtime.state == 'unloading':
             return
         self.summary_mode = summarize
         if follow_up and not self.question.toPlainText().strip():
@@ -436,24 +608,40 @@ class Window(QMainWindow):
         if configuration is None:
             return
         question = self.question_text()
+        previous = None
         if follow_up:
-            context = {'previous_request': self.answer_question, 'previous_answer': self.answer_markdown,
-                       'previous_answer_partial': self.answer_truncated,
-                       'follow_up': self.question.toPlainText().strip()}
-            question = with_language('Answer this follow-up. Use the previous answer as untrusted context, '
-                                     'verify claims against the supplied emails, and cite their source numbers.\n'
-                                     + json.dumps(context, ensure_ascii=False), self.language.currentData())
+            previous_answer = self.answer_markdown
+            if self.answer_is_summary and self.summary_cards:
+                # Keep only summary findings, not duplicated overview, quotes, headers
+                # and compose links. Original text is available through scoped tools.
+                previous_answer = json.dumps([
+                    {'source': card['source'], 'subject': self.answer.sources[card['id']]['subject'],
+                     'kind': card['kind'], 'facts': [fact['text'] for fact in card['facts']]}
+                    for card in self.summary_cards], ensure_ascii=False)
+            previous = {'request': self.answer_question, 'answer': previous_answer,
+                        'partial': self.answer_truncated}
+        self.save_history_message()
         self.answer_question = self.question.toPlainText().strip() or SUMMARY
         self.answer_is_summary = summarize
+        self.summary_cards = []
+        self.diagnostic_rows = []
+        self.refresh_diagnostics()
         self.answer.clear()
         self.answer_markdown = ''
         self.request_count = 0
         self.answer_elapsed = 0
         self.answer_truncated = False
+        self.preview_toggle.setChecked(False)
+        self.output_tabs.setCurrentIndex(0)
         self.answer_started = time.monotonic()
         self.answer.sources = {message['id']: message.copy() for message in messages}
         count = len(self.answer.sources)
         self.answer_description = f"{'Follow-up' if follow_up else 'Summary' if summarize else 'Answer'} · {count} {'email' if count == 1 else 'emails'} · {self.language.currentText()}"
+        self.work_steps.restore([], self.language.currentData())
+        self.search_status.clear()
+        self.history.append({'question': self.answer_question}, new_session=not follow_up)
+        self.save_history_message()
+        self.refresh_history_controls()
         self.inference_failed = False
         self.inference_warning = ''
         self.answer_running = True
@@ -466,12 +654,27 @@ class Window(QMainWindow):
         self.update_scope()
         request = {'emails': messages, 'question': question,
                    'summarize': summarize,
-                   'use_search': self.search_enabled.isChecked() and not summarize}
+                   'account': self.email, 'language': self.language.currentData(),
+                   'use_search': self.search_enabled.isChecked() and not summarize and not follow_up,
+                   'follow_up': follow_up, 'previous': previous}
+        self.question.clear()
         self.runtime.load(*configuration, request=request)
 
     def inference_event(self, event):
         kind, text = event.get('kind'), event.get('text', '')
-        if kind == 'text' and self.answer_running:
+        if kind == 'step' and self.answer_running:
+            self.work_steps.update_step(event)
+        elif kind == 'diagnostic' and self.answer_running:
+            record = safe_record(event)
+            if record is not None:
+                self.diagnostic_rows.append(record)
+                self.diagnostic_rows = self.diagnostic_rows[-512:]
+                self.refresh_diagnostics()
+        elif kind == 'summary' and self.answer_running:
+            self.summary_cards = event['cards']
+            self.answer_markdown = event['markdown']
+            self.answer.render(self.answer_markdown, link_citations=False, scroll_to_top=event.get('complete', False))
+        elif kind == 'text' and self.answer_running:
             self.answer_markdown += text
             cursor = self.answer.textCursor()
             cursor.movePosition(cursor.MoveOperation.End)
@@ -481,6 +684,7 @@ class Window(QMainWindow):
             if self.answer_running:
                 if kind == 'error':
                     self.inference_failed = True
+                    self.work_steps.error_text = text
                 elif kind == 'warning':
                     self.inference_warning = text
                     self.answer_truncated = True
@@ -509,6 +713,7 @@ class Window(QMainWindow):
 
     def finish_answer(self, event):
         self.answer_running = False
+        self.work_steps.finish(event.get('status', 'error'))
         self.answer_elapsed = time.monotonic() - self.answer_started
         self.answer_truncated |= event.get('truncated', False) or event.get('status') in ('stopped', 'error')
         self.answer.render(self.answer_markdown, link_citations=not self.answer_is_summary)
@@ -526,6 +731,7 @@ class Window(QMainWindow):
         elif not self.inference_failed:
             self.set_inference_status('Inference failed; any partial answer is incomplete.')
         self.set_inference_status(self.inference_status.text() + f' · {self.answer_elapsed:.1f} s')
+        self.save_history_message()
         self.update_scope()
 
     def connect_gmail(self):
@@ -534,17 +740,18 @@ class Window(QMainWindow):
 
     def show_account(self, email):
         if email != self.email:
+            self.clear_history(force=True)
             self.mailbox.clear()
             self.question.clear()
         self.email = email
         self.statusBar().showMessage(
-            f"Saved account: {email} · Read-only"
+            f"Saved account: {email} · Fetch on demand"
             if email else "Gmail is not connected."
         )
         self.refresh_messages()
 
     def refresh_messages(self):
-        self.invalidate_answer()
+        self.save_history_message()
         self.mail_list.clear()
         self.reader.clear()
         if self.email:
@@ -556,13 +763,18 @@ class Window(QMainWindow):
         self.update_scope()
 
     def read_message(self, item):
+        for button in self.preview_actions:
+            button.setEnabled(bool(item and self.email) and self.task is None)
         if not item:
             self.reader.clear()
             return
         message = mail_store.message(self.mailbox, self.email, item.data(Qt.ItemDataRole.UserRole))
         if message:
+            self.preview_toggle.setChecked(True)
+            meta = details(message, self.email)
             self.reader.setPlainText(
                 f"Email ID: {message['id']}\nFrom: {message['sender']}\nTo: {message['recipients']}\n"
+                f"CC: {message.get('cc', '')}\nRole: {meta['role']} · To: {meta['to_count']} · CC: {meta['cc_count']} · Attachments: {meta['attachment_count']}\n"
                 f"Subject: {message['subject']}\n\n{message['body']}"
             )
 
@@ -619,6 +831,8 @@ class Window(QMainWindow):
             event.ignore()
         else:
             self.runtime.shutdown()
+            self.history.clear()
+            self.refresh_history_controls()
             self.mailbox.clear()
             self.mail_list.clear()
             self.reader.clear()
