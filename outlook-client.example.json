@@ -1,0 +1,4 @@
+{
+  "client_id": "YOUR_MICROSOFT_ENTRA_APPLICATION_CLIENT_ID",
+  "tenant": "common"
+}

@@ -1,7 +1,7 @@
 """Background account operations with sanitized errors."""
 
 from PySide6.QtCore import QThread, Signal
-from ..mail import gmail
+from ..mail.errors import AccountError
 
 
 class AccountTask(QThread):
@@ -16,7 +16,7 @@ class AccountTask(QThread):
     def run(self):
         try:
             self.succeeded.emit(self.operation())
-        except gmail.AccountError as error:
+        except AccountError as error:
             self.failed.emit(str(error))
         except FileNotFoundError:
             self.failed.emit(

@@ -5,6 +5,7 @@
 client_secret*.json
 credentials.json
 oauth-client.json
+outlook-client.json
 
 __pycache__/
 *.py[codz]
@@ -225,3 +226,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Locally generated synthetic benchmark reports (review before sharing)
+benchmarks/results/

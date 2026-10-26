@@ -81,3 +81,15 @@ class WorkerTests(unittest.TestCase):
                         workflow(request, backend, dict(max_input_tokens=1024,max_output_tokens=64,max_tasks=8))
                     self.assertTrue(systems)
                     self.assertTrue(all(f'Default response language: {language}' in system for system in systems))
+
+    def test_model_test_is_one_direct_call_without_mail_workflow(self):
+        backend = Backend()
+        events = []
+        request = dict(test_model=True, question='A synthetic prompt', language='Turkish')
+        with patch('ghost_box.models.worker.emit', side_effect=lambda kind, text='', **values: events.append(dict(kind=kind, text=text, **values))):
+            workflow(request, backend, dict(max_input_tokens=1024, max_output_tokens=64))
+        self.assertEqual(request, {})
+        self.assertEqual([e['count'] for e in events if e['kind'] == 'requests'], [1])
+        self.assertFalse(any(e['kind'] in ('search', 'summary', 'step') for e in events))
+        self.assertTrue(events[-1]['truncated'])
+        self.assertEqual(events[-1]['status'], 'success')

@@ -2,6 +2,39 @@
 
 Build a small desktop application in reviewable steps. Checked items are implemented or backed by the specific validation stated; unchecked items remain pending. Implementation checks do not replace the model-quality benchmark or device-specific release validation. Mixed implementation/release tasks are split below.
 
+## Agreed phases — updated 2026-10-26
+
+This phase plan is the authoritative scope/order for the detailed checklist below. Unchecked later-phase items do not block phase 1 completion.
+
+### Phase 1 — finish native Windows testing
+
+- [x] Live Gmail sending works (user-confirmed).
+- [x] Outlook setup and live testing complete (user-confirmed); this records the user's confirmation, not independent validation of every tenant or error path.
+- [ ] Test the current application on a real Windows machine: startup/shutdown, Gmail/Outlook connect and fetch, reviewed sending, credential storage, GGUF preset download/load/generation/Stop/unload, and usable Caspy layout without horizontal scrolling.
+
+Windows-machine testing is the only remaining phase 1 gate. After it passes, phase 1 is complete.
+
+### After phase 1 — package and share the beta
+
+- [ ] Package native applications, include configured OAuth client files and the Windows inference runtime, and check the packaged builds on fresh devices.
+- [ ] Share the packaged application with beta testers.
+
+Packaging and beta distribution follow phase 1; they are not additional phase 1 gates.
+
+### Phase 2 — email features, benchmarks, reliability and privacy
+
+- [ ] Remaining email features: chronological thread summaries, natural-language search with inspectable filters, optional local inbox date filtering, attachment forwarding and voice input.
+- [ ] Model-quality evaluation and repeatable benchmarks: accuracy, omissions, citations, conflicts, adversarial cases, latency, throughput and memory baselines.
+- [ ] Reliability and compatibility improvements, including broader custom-model diagnostics and investigation of the macOS TSM diagnostic.
+- [ ] Privacy/data-protection review: retention, backups, dependencies and network boundaries.
+
+### Phase 3 — later ideas
+
+- [ ] Evaluate local spam/attention classification.
+- [ ] Consider natural-language fetch descriptions with validated visible filters.
+- [ ] Consider additional bounded read-only tools where demonstrated needs justify them.
+- [ ] Consider explicit Social/Updates category controls.
+
 ## Email retention
 
 - [x] Keep emails and metadata only in RAM; every launch starts empty.
@@ -101,6 +134,7 @@ Initial preset: [mlx-community/Qwen3.5-4B-MLX-4bit](https://huggingface.co/mlx-c
 
 - [x] Run inference in a separate on-demand process with a small explicit communication protocol.
 - [x] Show unloaded/loading/generating/error states, streamed output, and **Stop**; retain the worker while idle and unload after five minutes.
+- [x] Add a collapsible RAM-only Try model sidebar panel with standalone input, streamed Markdown output, Run/Stop/Clear and elapsed time; reuse the selected model/settings without email context or a second worker.
 - [x] Add manual Load/Unload and five-minute warm-model idle timeout; pause the timer during generation.
 - [x] Unload before model/settings reload and stop the worker on exit; retain only one model.
 - [x] Add collapsed inference controls with per-model numeric profiles in local JSON and reviewed preset defaults.
@@ -149,7 +183,7 @@ Initial preset: [mlx-community/Qwen3.5-4B-MLX-4bit](https://huggingface.co/mlx-c
 - [x] Add source-bound Reply / Reply all / Forward with editable RAM-only drafts.
 - [x] Add one-level **Undo Caspy rewrite**, preserving the exact pre-generation text in RAM, including failed/interrupted rewrites; disable undo while generating/sending and clear the backup on dialog close.
 - [x] Add opt-in Gmail send permission, recipient/body confirmation, threaded replies, and no ambiguous automatic retry.
-- [ ] Verify live Gmail send authorization/delivery manually; automated checks use mocks only.
+- [x] Verify live Gmail send authorization/delivery manually (user-confirmed); automated checks use mocks only.
 - [ ] Add attachment forwarding and voice input in later increments.
 - [x] Split oversized selections into token-budgeted evidence tasks and hierarchical synthesis; show created/completed counts and enforce a call limit.
 - [ ] Evaluate summary omissions, source references, and conflicts across batch boundaries.
@@ -165,7 +199,11 @@ Initial preset: [mlx-community/Qwen3.5-4B-MLX-4bit](https://huggingface.co/mlx-c
 
 ## 8. Small evaluation set
 
-Start with approximately 20–30 synthetic messages across a few threads and 10 cases. Keep fixtures and expected results in simple JSON files, with a small runner using existing dependencies. Add private user-selected examples locally later; never commit real mailbox content.
+- [x] Add 24 fictional emails and 20 reviewable questions with expected answers/source IDs, including summary, BM25, bounded follow-up, revised decisions, billing status and injection cases.
+- [x] Add an opt-in synthetic-only CLI runner using the existing workflows, per-case timeout, cold-first/warm repeats, JSON/Markdown reports and runtime-provided per-call throughput where available.
+- [ ] Review all 20 expected answers, run both presets, and establish an accuracy/latency baseline. Lexical smoke checks are not factual accuracy scores.
+
+Start with 24 synthetic messages across a few threads and 20 cases (see benchmarks/REVIEW.md). Keep fixtures and expected results in simple JSON files, with a small runner using existing dependencies. Add private user-selected examples locally later; never commit real mailbox content.
 
 | # | Task | Expected evidence |
 | --- | --- | --- |
@@ -189,7 +227,7 @@ Start with approximately 20–30 synthetic messages across a few threads and 10 
 
 ### Repeatable model comparison benchmark
 
-- [ ] Add a small CLI benchmark runner using the same versioned synthetic fixtures, expected answers, and prompt/workflow versions for every candidate model; support local MLX and GGUF without another framework.
+- [x] Add a small CLI benchmark runner using versioned synthetic fixtures, expected answers and a workflow hash; support local MLX and GGUF without another framework. Native model benchmark results and human accuracy review remain pending.
 - [ ] Track accuracy per case: retrieval IDs, required facts, unsupported claims, source attribution, dates/amounts/statuses, selected response language, appropriate no-evidence answers, and follow-up lookup decisions. Keep human factual review separate from deterministic checks; language compliance alone is not factual accuracy.
 - [ ] Record end-to-end latency, time to first visible answer token (including routing/retrieval), model load time, and actual LLM-call count. Measure cold and warm runs separately; include failures/timeouts and run counts in reports.
 - [ ] Track actual input/output token counts and generation throughput (tokens/s) per LLM call, with the tokenizer/runtime identified. Define decode tokens/s from generated tokens and measured decode duration; report prompt/prefill throughput separately when available. Do not substitute characters/4, words/s, or output tokens divided by full workflow latency for decode tokens/s; mark unavailable runtime metrics explicitly.
@@ -203,13 +241,16 @@ Start with approximately 20–30 synthetic messages across a few threads and 10 
 - [x] Add a pinned, SHA-256-verified Qwen3.5 GGUF Q4_K_M download preset beside MLX; preserve independent selection/settings and custom model paths.
 - [x] Include the pinned upstream Windows x64 CPU llama.cpp wheel in the base `uv run --locked main.py` environment; verify Windows dependency resolution without changing the macOS extras.
 - [ ] Validate the selected GGUF preset on real Windows hardware; macOS cross-platform resolution is not native Windows validation.
-- [ ] Add Outlook only after the Gmail workflow is complete.
+- [x] Add Outlook/Microsoft 365 provider selection, browser OAuth via MSAL, native encrypted token-cache storage, and manual Graph fetching with pagination, UTC date bounds, excluded folder descendants, RAM-only normalization and coverage.
+- [x] Route compose permission checks, reviewed MIME sending and disconnect to the selected provider; keep Gmail/Outlook credentials separate and clear RAM on provider switches.
+- [x] Outlook setup and live operation confirmed by the user. Broader Outlook.com/company tenant, MFA/consent, refresh and disconnect coverage is not separately documented.
+- [x] Live Outlook testing confirmed by the user. Individual reply/reply-all/forward recipient/threading cases are not separately documented; mocked POST tests remain separate from live testing.
 - [ ] Package native applications and verify startup, idle memory, downloads, credentials, and worker shutdown on supported devices.
 - [ ] Review local data protection, retention, backups, dependencies, and network boundaries before broader confidential use.
 
 ## Future optimizations
 
-- [ ] Evaluate a small local spam/attention decision model; optionally gray out low-attention mail while keeping it selectable and available. No automatic removal or provider-side action.
+- [ ] Add and evaluate a small local decision model for spam / not-spam and attention classification; optionally gray out low-attention mail while keeping it selectable and available. No automatic removal or provider-side action.
 - [ ] Later add a natural-language fetch description next to From/To: people, date ranges, or keywords. Translate intent to validated visible filters before a user-triggered Fetch; do not implement yet.
 - [ ] Consider additional bounded read-only tools after BM25, only for demonstrated needs; no general agent framework.
 - [ ] Consider explicit Social/Updates category controls after the current Promotions option; do not silently hide categories.
@@ -228,4 +269,5 @@ No Docker distribution, separate application SSO, automatic fetching, automatic 
 - [ ] Investigate the reproduced macOS TSM native diagnostic; asynchronous read-only dialogs are implemented but are not a confirmed fix. Do not hide stderr.
 - [x] Local Turkish reply drafting without a send grant or delivery.
 - [x] Mocked send tests: canceled approval makes no call, approved payload stays frozen, success prevents duplicate submission, ambiguous failure is not retried.
-- [ ] Broader summary accuracy, adversarial mail, real Gmail delivery, and native Windows checks remain required before broad use.
+- [x] Synthetic Outlook checks cover chunked native cache storage, wrong-account/denied-consent protection, refresh failure, folder exclusions, pagination, date bounds, cancellation, MIME submission and provider isolation; no real Microsoft account or mail was accessed.
+- [ ] Native Windows testing remains the final phase 1 gate. Gmail sending and Outlook live testing are user-confirmed; broader summary accuracy, adversarial mail and privacy/reliability reviews belong to phase 2.

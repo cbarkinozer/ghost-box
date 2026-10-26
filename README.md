@@ -8,7 +8,7 @@ A lightweight desktop email assistant powered by **Caspy**, your local small lan
 
 Ghost-box helps you summarize email conversations, search downloaded messages, and ask questions with references to the original mail. It is designed for macOS and Windows, with a small Python codebase that is straightforward to read, review, and maintain.
 
-> **Status: local Q&A and summarization.** Gmail fetch/reading, RAM-only emails, model downloads/selection, MLX and local GGUF inference, batch-task progress, memory reporting, and JSON generation profiles are implemented. Synthetic offline and UI checks passed on Apple Silicon. Literal inbox search, RAM cleanup controls and fetch coverage are implemented; broader quality evaluations, native Windows validation, and packaging remain planned.
+> **Status: local Q&A and summarization.** Gmail and Outlook adapters, RAM-only emails, model downloads/selection, MLX and local GGUF inference, batch-task progress, memory reporting, and JSON generation profiles are implemented. Synthetic offline and UI checks passed on Apple Silicon. Literal inbox search, RAM cleanup controls and fetch coverage are implemented; broader quality evaluations, live Microsoft sign-in/delivery checks, native Windows validation, and packaging remain planned.
 
 ## Purpose
 
@@ -37,7 +37,7 @@ Reduce the time spent reading and finding email while keeping AI processing on t
 | --- | --- |
 | Platforms | macOS on Apple Silicon and Windows; inference support depends on the selected backend and hardware |
 | Interface | One desktop window with a mail list, message view, and summary/question panel |
-| Accounts | One account initially; Gmail and Outlook connectors introduced in stages |
+| Accounts | One active provider/account at a time; Gmail and Outlook have separate saved credentials |
 | Fetching | Manual fetch with a selected date range and visible progress, cancellation, and errors |
 | Summaries | Summarize a selected message or conversation, preserving decisions, requests, and stated deadlines |
 | Search | Local keyword and exact-text search, with sender, date, and subject filters |
@@ -106,7 +106,7 @@ Handle conversation structure, repeated quoted replies, and message dates explic
 
 The initial implementation should:
 
-- Use read-only OAuth by default; request the separate Gmail send scope only from the compose dialog. Never collect mailbox passwords.
+- Use read-only OAuth by default; request the provider’s separate send scope only from the compose dialog. Never collect mailbox passwords.
 - Store account tokens in the operating system's credential store.
 - Keep credentials out of the model worker and provide only the messages needed for a request.
 - Process email as text without loading remote images, tracking pixels, or active HTML.
@@ -174,7 +174,7 @@ PySide6-Essentials remains pinned to the checked version, 6.10.2. A recurring Co
 
 On this development Mac, native Cocoa testing also reproduced `TSMSendMessageToUIServer: CFMessagePortSendRequest FAILED(-1) ... com.apple.tsm.uiserver` diagnostics while the window and read-only dialogs continued to open/close. Their underlying macOS text-input service cause is not established. Diagnostics and step-detail dialogs now use asynchronous `open()` with explicit lifetime cleanup, following [Qt's guidance](https://doc.qt.io/qt-6/qdialog.html#exec) to avoid nested dialog event loops. The native message still occurred during this smoke check, so this is **not a confirmed fix** for that OS diagnostic. stderr is not globally suppressed.
 
-The account toolbar is implemented in [window.py](ghost_box/ui/window.py); [gmail.py](ghost_box/mail/gmail.py) handles OAuth and native credential storage. Two additional direct dependencies are `google-auth-oauthlib` for Google's browser-based OAuth with PKCE, and `keyring` for macOS Keychain / Windows Credential Manager. Their transitive dependencies are recorded in the lockfile. The full Gmail API SDK is not installed.
+The account toolbar is implemented in [window.py](ghost_box/ui/window.py). OAuth uses `google-auth-oauthlib` for Google and pinned `msal==1.39.0` for Microsoft public-client browser sign-in/token refresh. `keyring` selects macOS Keychain or Windows Credential Manager explicitly. Microsoft Graph uses the existing `requests` dependency; no Gmail/Graph API SDK or MSAL broker runtime is installed. MSAL adds PyJWT transitively; all versions are recorded in the lockfile.
 
 ### Connect Gmail
 
@@ -194,6 +194,24 @@ The official flow uses a temporary loopback callback listener on `127.0.0.1`, no
 On startup, the application reads only the locally saved account identity; it does not contact Google or assert that saved credentials remain valid. **Disconnect** removes the local credential entry and clears session mail without modifying Gmail or revoking Google's server-side grant. To revoke that grant as well, remove Ghost-box from your Google Account's connected applications.
 
 Google testing restrictions, restricted-scope verification, and Workspace administrator policies can affect sign-in. See [Google's desktop OAuth documentation](https://developers.google.com/identity/protocols/oauth2/native-app). There is no plaintext-token fallback if the native credential store is unavailable.
+
+### Connect Outlook / Microsoft 365
+
+Select **Outlook** in the account toolbar, then **Connect Outlook**. The system browser handles Microsoft sign-in, SSO/MFA and delegated consent. Personal Outlook.com accounts and Microsoft 365 work/school accounts with a Graph-accessible Exchange Online mailbox are supported by this adapter; on-premises Exchange and sovereign-cloud authorities are not configured. Selecting another provider stops active inference and clears all mail, conversations and retained snapshots from RAM, even when both providers use the same email address. Saved Gmail and Microsoft credentials remain separate; Disconnect removes only the selected provider's saved connection. Switching providers never fetches mail automatically.
+
+Maintainer setup (once, before distributing a configured build):
+
+1. Open [Microsoft Entra app registrations](https://entra.microsoft.com/) and register a public desktop application. Choose **Accounts in any organizational directory and personal Microsoft accounts** if both account types should work; otherwise use the appropriate company tenant/account type.
+2. Under **Authentication**, add **Mobile and desktop applications** with redirect URI **`http://localhost`**. Enable public client flows as required by the registration. Do not create or configure a client secret for this native application. See Microsoft's [desktop app registration guidance](https://learn.microsoft.com/en-us/entra/identity-platform/scenario-desktop-app-registration).
+3. Under **API permissions**, add Microsoft Graph **delegated** permissions `User.Read` and `Mail.Read`. Add `Mail.Send` if reviewed sending will be offered. The app requests read/profile access initially; send access is requested separately from the compose dialog. Tenant administrators may need to approve these permissions; the app does not bypass tenant policy.
+4. Copy `outlook-client.example.json` to **`outlook-client.json`** beside `main.py`. Replace `client_id` with the **Application (client) ID**. Set `tenant` to `common` for the multitenant/personal registration, `organizations`/`consumers` for a restricted account type, or your company tenant GUID. The file is ignored by Git; the checked-in example contains placeholders only.
+5. Run the app, select Outlook and connect. No mail is fetched until **Fetch** is pressed. Refresh/revocation failures prompt reconnection rather than silently changing accounts.
+
+Microsoft tokens are handled by [MSAL's public-client flow](https://msal-python.readthedocs.io/en/latest/#msal.PublicClientApplication.acquire_token_interactive). The serialized token cache is held in RAM and encrypted OS credential entries, never a file. ASCII chunks stay below Windows Credential Manager's per-entry size limit; a new cache generation is staged before its index is switched. Startup reads only the cached account identity and makes no Microsoft request. A fresh sign-in or sending grant verifies the Graph account before replacing credentials. Disconnect removes the saved token entries; revoking server-side consent is a separate Microsoft account/tenant action.
+
+Outlook fetch uses [Graph list messages](https://learn.microsoft.com/en-us/graph/api/user-list-messages?view=graph-rest-1.0), UTC `receivedDateTime` bounds and an inclusive displayed end minute. Pagination is confined to `https://graph.microsoft.com/v1.0/`; redirects and foreign/cyclic next links are refused. Sent and normal folders are included. Junk Email, Deleted Items and Drafts (including descendants) and draft messages are excluded from the retained set. Graph pages may contain excluded messages, which are discarded in RAM. Outlook has no Gmail Promotions category, so that checkbox is hidden. Message bodies are requested as plain text, with local HTML-to-text fallback; remote resources are not loaded. Attachment listing requests only ID/inline metadata for counts, never attachment contents. A successful fetch replaces mail/coverage atomically; failure or cancellation preserves the previous set.
+
+**Live Microsoft authorization, tenant behavior, and real delivery remain unverified.** Development checks use mocked Graph/MSAL/native-store responses and synthetic mail; they do not sign into Microsoft or send real messages.
 
 ### Fetch and read mail
 
@@ -374,8 +392,25 @@ Use card action links or the email-preview **Reply / Reply all / Forward** butto
 
 Sending initially remains disabled. **Enable Gmail sending** opens the system-browser OAuth flow for the existing account with `gmail.readonly` plus `gmail.send`. Add the send scope to the OAuth consent configuration if needed; no Gmail password or broader modify scope is used. Authorizing a different account does not overwrite the saved connection. See Google's [scope guidance](https://developers.google.com/workspace/gmail/api/auth/scopes).
 
-**Review and Send…** validates the recipient fields and MIME headers, snapshots the message, and opens a confirmation showing From, To, CC, Subject, and the exact body in Details. The default is Cancel. Only confirming **Send** posts that approved snapshot through Gmail. Draft generation, source clicks, model output, and canceled confirmations cannot send. Successful sending locks the dialog against duplicate submission. Ambiguous network/5xx outcomes are not retried; the dialog preserves the message and asks the user to check Gmail Sent. Grant access and live delivery must still be verified by the user: development checks mocked sending and never sent real mail.
+**Review and Send…** validates the recipient fields and MIME headers, snapshots the message, and opens a confirmation showing From, To, CC, Subject, and the exact body in Details. The default is Cancel. Only confirming **Send** posts that approved snapshot through the provider captured when the compose dialog opened. Draft generation, source clicks, model output, and canceled confirmations cannot send. Successful sending locks the dialog against duplicate submission. Ambiguous network/5xx outcomes are not retried; the dialog preserves the message and asks the user to check the provider’s Sent folder. Grant access and live delivery must still be verified by the user: development checks mocked sending and never sent real mail.
 
 Replies use the original RFC Message-ID/References and Gmail thread ID when the subject is unchanged. Changed subjects can start a different conversation. Forwarding creates a new message and includes the source's plain text; original attachments are not forwarded. Attachment contents and voice input remain future work. The send transport follows Google's [sending guide](https://developers.google.com/workspace/gmail/api/guides/sending) and [threading requirements](https://developers.google.com/workspace/gmail/api/guides/threads).
 
-Email content is transmitted to Gmail only when the user explicitly approves sending. It is never uploaded to a remote inference provider or written to a local draft/cache database. Native credentials and numeric preferences remain the only persisted account/application state. System clipboard, swap, backups, and crash-dump behavior remain outside application storage guarantees.
+For Outlook, **Enable Outlook sending** requests delegated `Mail.Send` for the same Graph account. Approved plain-text MIME is submitted exactly once. Unchanged reply/reply-all envelopes use Graph's [reply](https://learn.microsoft.com/en-us/graph/api/message-reply?view=graph-rest-1.0) / [replyAll](https://learn.microsoft.com/en-us/graph/api/message-replyall?view=graph-rest-1.0) endpoints. Edited recipient sets or subjects, and text-only forwards, use [sendMail](https://learn.microsoft.com/en-us/graph/api/user-sendmail?view=graph-rest-1.0) with the exact reviewed MIME envelope so recipients cannot be expanded by a reply-all action. Reply MIME retains RFC References/In-Reply-To headers; threading for changed envelopes needs live validation. HTTP 202 means Microsoft accepted submission, not confirmed delivery. Timeouts/5xx/unexpected send outcomes lock against blind resubmission; no POST replay or provider-side draft is created by the app.
+
+Email content is transmitted to the selected mail provider only when the user explicitly approves sending. It is never uploaded to a remote inference provider or written to a local draft/cache database. Native credentials and numeric preferences remain the only persisted account/application state. System clipboard, swap, backups, and crash-dump behavior remain outside application storage guarantees.
+
+### Quick model test
+
+Open **Try model** in the 👻 Caspy sidebar, enter a prompt, and press **Run**.
+It uses the selected local model and current inference parameters, streams the answer,
+and shows elapsed seconds. **Stop** unloads the worker; **Clear** removes the test
+input and output. Each run is independent, includes no emails or previous answers,
+and stays in RAM. Email conversations remain separate. The same worker is reused,
+so model tests and email generation run one at a time.
+
+### Synthetic email benchmark
+
+See [benchmarks/REVIEW.md](benchmarks/REVIEW.md) for 20 reviewable questions over
+24 fictional emails, and [benchmark instructions](benchmarks/README.md) to compare
+local models using the existing email workflows. No mailbox login is needed.

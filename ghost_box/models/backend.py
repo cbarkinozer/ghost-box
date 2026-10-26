@@ -40,6 +40,7 @@ class MLXBackend:
 
     def generate(self, prompt, maximum):
         from mlx_lm import stream_generate
+        self.last_metrics = {}
         self.finish_reason = None
         # A fresh KV cache for each task; no prompt cache files or conversation history.
         for response in stream_generate(self.model, self.tokenizer, prompt=prompt,
@@ -47,6 +48,11 @@ class MLXBackend:
                                         logits_processors=self.processors):
             if response.finish_reason:
                 self.finish_reason = response.finish_reason
+            self.last_metrics = dict(input_tokens=response.prompt_tokens,
+                                     output_tokens=response.generation_tokens,
+                                     decode_tokens_per_s=response.generation_tps,
+                                     prefill_tokens_per_s=response.prompt_tps,
+                                     measurement='mlx-lm GenerationResponse runtime counters')
             yield response.text
 
     def clear_request(self):
@@ -89,8 +95,11 @@ class GGUFBackend:
         return (tokens, formatted.stop, formatted.stopping_criteria), len(tokens)
 
     def generate(self, prompt, maximum):
+        self.last_metrics = {}
         self.finish_reason = None
         tokens, stop, stopping = prompt
+        import llama_cpp
+        llama_cpp.llama_perf_context_reset(self.model.ctx)
         for response in self.model.create_completion(
             prompt=tokens, stop=stop or [], stopping_criteria=stopping,
             stream=True, max_tokens=maximum, temperature=self.params['temperature'],
@@ -101,6 +110,15 @@ class GGUFBackend:
             if choice.get('finish_reason'):
                 self.finish_reason = choice['finish_reason']
             yield choice['text']
+
+        perf = llama_cpp.llama_perf_context(self.model.ctx)
+        self.last_metrics = dict(input_tokens=len(tokens), output_tokens=None,
+                                 decode_tokens_per_s=(perf.n_eval * 1000 / perf.t_eval_ms
+                                                       if perf.t_eval_ms > 0 else None),
+                                 prefill_tokens_per_s=(perf.n_p_eval * 1000 / perf.t_p_eval_ms
+                                                        if perf.t_p_eval_ms > 0 else None),
+                                 decoded_evaluations=perf.n_eval,
+                                 measurement='llama.cpp context evaluation counters; evaluated tokens exclude first-token sampling; output count unavailable')
 
     def clear_request(self):
         import llama_cpp

@@ -1,8 +1,7 @@
 """Gmail fetching and explicitly enabled sending. Tokens live in the OS credential store."""
 
 import json
-import sys
-from datetime import datetime, timedelta
+from datetime import datetime
 from functools import partial
 from pathlib import Path
 
@@ -12,16 +11,17 @@ from google.auth.transport.requests import AuthorizedSession, Request
 from google.auth.exceptions import RefreshError
 
 from .text import decode_message
+from .credentials import credential_store
+from .errors import AccountError, SendError
+from .drafting import build_payload
+from .dates import time_bounds
 
+NAME = "Gmail"
 SCOPE = "https://www.googleapis.com/auth/gmail.readonly"
 SEND_SCOPE = "https://www.googleapis.com/auth/gmail.send"
 SERVICE = "ghost-box"
 ACCOUNT = "gmail"
 CLIENT_FILE = Path(__file__).resolve().parents[2] / "oauth-client.json"
-
-
-class AccountError(RuntimeError):
-    """A safe diagnostic message that never includes an OAuth response."""
 
 
 def check_profile_response(response):
@@ -43,17 +43,6 @@ def check_profile_response(response):
             if reasons & codes:
                 raise AccountError(message)
     response.raise_for_status()
-
-
-def credential_store():
-    # Choose native backends explicitly: never fall back to plaintext storage.
-    if sys.platform == "darwin":
-        from keyring.backends.macOS import Keyring
-    elif sys.platform == "win32":
-        from keyring.backends.Windows import WinVaultKeyring as Keyring
-    else:
-        raise RuntimeError("Gmail credential storage supports macOS and Windows only.")
-    return Keyring()
 
 
 def saved_account() -> str:
@@ -130,16 +119,6 @@ def disconnect() -> str:
     return ""
 
 
-def time_bounds(first, last):
-    """Local date/time inputs; include the entire displayed end minute."""
-    if first > last:
-        raise AccountError("From must be on or before To.")
-    return (
-        int(first.timestamp()),
-        int((last + timedelta(minutes=1)).timestamp()),
-    )
-
-
 def fetch(first, last, mailbox, account, progress, cancelled, exclude_promotions=True):
     lower, upper = time_bounds(first, last)
     count = 0
@@ -178,7 +157,7 @@ def fetch(first, last, mailbox, account, progress, cancelled, exclude_promotions
                     stopped = cancelled()
                     if not stopped:
                         mailbox.replace(account, pending, dict(first=first, last=last,
-                            exclude_promotions=exclude_promotions, completed_at=datetime.now(), count=count))
+                            exclude_promotions=exclude_promotions, completed_at=datetime.now(), count=count, provider='gmail'))
                     return {"count": count, "cancelled": stopped}
         return {"count": count, "cancelled": True}
     except AccountError:
@@ -218,12 +197,6 @@ def credentials_for(account, sending=False):
         saved['credentials'] = json.loads(credentials.to_json())
         store.set_password(SERVICE, ACCOUNT, json.dumps(saved))
     return credentials
-
-
-class SendError(AccountError):
-    def __init__(self, message, uncertain=False):
-        super().__init__(message)
-        self.uncertain = uncertain
 
 
 def send(account, payload):

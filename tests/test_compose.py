@@ -76,3 +76,26 @@ class ComposeTests(unittest.TestCase):
                 dialog.reject()
                 self.assertFalse(dialog.source);self.assertEqual(dialog.body.toPlainText(),'')
                 owner.close()
+
+    def test_selected_language_reaches_both_draft_request_and_source_payload(self):
+        import json
+        from test_mail_controls import window_fixture, mail
+        for language in ('Turkish', 'English'):
+            with self.subTest(language=language), window_fixture(self.app) as (owner, directory):
+                owner.language.setCurrentIndex(owner.language.findData(language))
+                source = mail('synthetic', 'Meeting', 'Could you confirm Friday?')
+                with patch('ghost_box.mail.gmail.can_send', return_value=False):
+                    dialog = ComposeDialog(source, owner.email, 'reply', owner)
+                    self.drain(dialog)
+                dialog.instructions.setPlainText('cuma olmaz haftaya bakalım')
+                with (patch.object(owner, 'model_configuration', return_value=(Path(directory), owner.caspy.parameters())),
+                      patch.object(owner.runtime, 'load') as load):
+                    dialog.generate()
+                request = load.call_args.kwargs['request']
+                payload = json.loads(request['question'])
+                self.assertEqual(request['language'], language)
+                self.assertEqual(payload['response_language'], language)
+                self.assertEqual(payload['source_email_untrusted']['body'], source['body'])
+                self.assertEqual(payload['user_instruction'], 'cuma olmaz haftaya bakalım')
+                dialog.model_event(dict(kind='done', status='stopped'))
+                dialog.reject()

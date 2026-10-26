@@ -19,10 +19,10 @@ from PySide6.QtWidgets import (
     QAbstractItemView, QHBoxLayout, QVBoxLayout, QWidget,
     QProgressBar,
     QComboBox,
-    QCheckBox, QTabWidget, QLineEdit,
+    QCheckBox, QTabWidget, QLineEdit, QScrollArea,
 )
 
-from ..mail import gmail
+from ..mail import gmail, outlook
 from ..mail import store as mail_store
 from .caspy import ModelPanel
 from ..mail.context import SYSTEM, SUMMARY, build_context, with_language
@@ -63,6 +63,8 @@ class Window(QMainWindow):
         self.resize(1180, 820)
         self.setMinimumSize(1000, 700)
         self.task = None
+        self.test_running = False
+        self.test_text = ''
         self.answer_running = False
         self.history = History()
         self.summary_mode = False
@@ -95,11 +97,17 @@ class Window(QMainWindow):
         toolbar = QToolBar("Account")
         toolbar.setMovable(False)
         self.addToolBar(toolbar)
-        self.connect_button = QPushButton("Connect Gmail")
-        self.connect_button.clicked.connect(self.connect_gmail)
+        self.provider_picker = QComboBox()
+        self.provider_picker.addItem('Gmail', 'gmail')
+        self.provider_picker.addItem('Outlook', 'outlook')
+        saved_provider = self.preferences.value('mail/provider', 'gmail', type=str)
+        self.provider_picker.setCurrentIndex(max(0, self.provider_picker.findData(saved_provider)))
+        toolbar.addWidget(self.provider_picker)
+        self.connect_button = QPushButton('Connect ' + self.provider.NAME)
+        self.connect_button.clicked.connect(self.connect_account)
         toolbar.addWidget(self.connect_button)
         self.disconnect_button = QPushButton("Disconnect")
-        self.disconnect_button.clicked.connect(lambda: self.start(gmail.disconnect))
+        self.disconnect_button.clicked.connect(lambda: self.start(self.provider.disconnect))
         toolbar.addWidget(self.disconnect_button)
         toolbar.addWidget(QLabel('  Response language '))
         self.language = QComboBox()
@@ -181,7 +189,7 @@ class Window(QMainWindow):
         mail_layout.addWidget(self.mail_list)
         cleanup_row = QHBoxLayout()
         self.delete_mail_button = QPushButton('Delete local')
-        self.delete_mail_button.setToolTip('Remove selected mail from RAM and clear dependent conversations. Never deletes from Gmail. A later Fetch may retrieve it again.')
+        self.delete_mail_button.setToolTip('Remove selected mail from RAM and clear dependent conversations. Never deletes from the provider. A later Fetch may retrieve it again.')
         self.delete_mail_button.clicked.connect(self.delete_selected_mail)
         cleanup_row.addWidget(self.delete_mail_button)
         self.clear_mail_button = QPushButton('Clear all mail')
@@ -317,9 +325,17 @@ class Window(QMainWindow):
         content.addWidget(mail_panel)
         content.addWidget(reading_panel)
         self.caspy = ModelPanel()
-        self.caspy.setMinimumWidth(240)
-        self.caspy.setMaximumWidth(280)
-        self.model_toggle.toggled.connect(self.caspy.setVisible)
+        model_scroll = QScrollArea()
+        model_scroll.setWidgetResizable(True)
+        model_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        model_scroll.setMinimumWidth(260)
+        model_scroll.setMaximumWidth(340)
+        model_scroll.setWidget(self.caspy)
+        self.model_toggle.toggled.connect(model_scroll.setVisible)
+        self.caspy.test_run.clicked.connect(self.test_model)
+        self.caspy.test_stop.clicked.connect(lambda: self.runtime.unload('Stopped by user'))
+        self.caspy.test_clear.clicked.connect(self.clear_model_test)
+        self.caspy.test_input.textChanged.connect(self.update_model_buttons)
         self.caspy.selector.currentIndexChanged.connect(self.model_selection_changed)
         self.caspy.parameters_changed.connect(self.scope_changed)
         self.caspy.load_button.clicked.connect(self.load_model)
@@ -327,7 +343,7 @@ class Window(QMainWindow):
         self.caspy.remove_requested.connect(self.remove_preset)
         self.runtime.event.connect(self.inference_event)
         self.runtime.state_changed.connect(self.model_state_changed)
-        content.addWidget(self.caspy)
+        content.addWidget(model_scroll)
         content.setSizes([280, 640, 260])
         content.setStretchFactor(0, 0)
         content.setStretchFactor(1, 1)
@@ -336,12 +352,38 @@ class Window(QMainWindow):
         self.language.currentIndexChanged.connect(self.language_changed)
         self.model_state_changed()
         self.scope_changed()
-        self.start(gmail.saved_account)
+        self.provider_picker.currentIndexChanged.connect(self.provider_changed)
+        self.update_provider_controls()
+        self.start(self.provider.saved_account)
+
+    @property
+    def provider(self):
+        return {'gmail': gmail, 'outlook': outlook}[self.provider_picker.currentData()]
+
+    def update_provider_controls(self):
+        self.connect_button.setText('Connect ' + self.provider.NAME)
+        self.skip_promotions.setVisible(self.provider is gmail)
+        excluded = 'Spam, Trash and Drafts' if self.provider is gmail else 'Junk, Deleted Items and Drafts'
+        self.reader.setPlaceholderText(f"Fetch mail from {self.provider.NAME}, then select a message.\n"
+            f"Times are local. Sent mail is included; {excluded} are excluded.\n"
+            "Emails stay in RAM and are fetched only on request.")
+
+    def provider_changed(self):
+        self.clear_history(force=True)
+        self.mailbox.clear()
+        self.email = ''
+        self.fetch_state = 'idle'
+        self.mail_search.clear(); self.question.clear()
+        self.preferences.setValue('mail/provider', self.provider_picker.currentData())
+        self.update_provider_controls()
+        self.refresh_messages()
+        self.start(self.provider.saved_account)
 
     def start(self, operation, success=None):
         self.save_history_message()
         if self.answer_running:
             self.stop_inference()
+        self.provider_picker.setEnabled(False)
         self.connect_button.setEnabled(False)
         self.disconnect_button.setEnabled(False)
         self.fetch_button.setEnabled(False)
@@ -416,11 +458,14 @@ class Window(QMainWindow):
         coverage = self.mailbox.coverage.get(self.email)
         if not coverage:
             return 'No successful fetch recorded this session.'
-        return (f"Fetched local range: {coverage['first']:%Y-%m-%d %H:%M} to {coverage['last']:%Y-%m-%d %H:%M} (full end minute). "
+        provider = coverage.get('provider', 'gmail')
+        category = ('No Promotions filter for Outlook. ' if provider == 'outlook' else
+                    'Promotions excluded. ' if coverage['exclude_promotions'] else 'Promotions included. ')
+        excluded = 'Junk, Deleted Items and Drafts (including descendants)' if provider == 'outlook' else 'Spam, Trash and Drafts'
+        return (f"{provider.title()} fetched local range: {coverage['first']:%Y-%m-%d %H:%M} to {coverage['last']:%Y-%m-%d %H:%M} (full end minute). "
                 f"{coverage['count']} emails fetched at {coverage['completed_at']:%Y-%m-%d %H:%M}; "
                 f"{len(mail_store.messages(self.mailbox, self.email))} currently retained locally. "
-                + ('Promotions excluded. ' if coverage['exclude_promotions'] else 'Promotions included. ')
-                + 'Sent included; Spam, Trash and Drafts excluded. This is not the whole Gmail mailbox.')
+                + category + f'Sent included; {excluded} excluded. This is not the whole provider mailbox.')
 
     def refresh_coverage(self):
         total = self.mail_list.count()
@@ -434,7 +479,9 @@ class Window(QMainWindow):
             removed = coverage['count'] - total
             if removed > 0:
                 text += f'\n{removed} locally removed since fetch'
-            text += f"\n{'Promotions skipped' if coverage['exclude_promotions'] else 'Promotions included'} · {coverage['completed_at']:%H:%M}"
+            category = ('Outlook folders' if coverage.get('provider') == 'outlook' else
+                        'Promotions skipped' if coverage['exclude_promotions'] else 'Promotions included')
+            text += f"\n{category} · {coverage['completed_at']:%H:%M}"
         else:
             text += '\nNo successful fetch this session.'
         if self.fetch_state in ('fetching', 'cancelled', 'failed'):
@@ -467,7 +514,7 @@ class Window(QMainWindow):
         self.refresh_messages()
         if not self.answer_running:
             self.inference_status.setText('Selected local mail and dependent conversations removed.')
-        self.statusBar().showMessage(f'Removed {len(identifiers)} local email(s) and dependent conversations. Gmail unchanged; Fetch can retrieve them again.')
+        self.statusBar().showMessage(f'Removed {len(identifiers)} local email(s) and dependent conversations. Provider mailbox unchanged; Fetch can retrieve them again.')
 
     def clear_all_mail(self):
         if self.task is not None:
@@ -648,7 +695,7 @@ class Window(QMainWindow):
 
     def open_composer(self, identifier, mode):
         if not self.email or self.task is not None:
-            self.statusBar().showMessage('Wait for the account operation and connect Gmail before composing.')
+            self.statusBar().showMessage('Wait for the account operation and connect a mail account before composing.')
             return
         source = mail_store.message(self.mailbox, self.email, identifier)
         if source is None:
@@ -693,6 +740,13 @@ class Window(QMainWindow):
         except ValueError:
             params = None
         matches = self.runtime.matches(folder, params)
+        test_idle = (not self.test_running and not self.answer_running and not self.runtime.busy
+                     and self.task is None and self.runtime.state != 'unloading'
+                     and self.caspy.task is None and self.pending_preset_removal is None)
+        self.caspy.test_run.setEnabled(test_idle and bool(self.caspy.test_input.toPlainText().strip()))
+        self.caspy.test_stop.setEnabled(self.test_running and self.runtime.state != 'unloading')
+        self.caspy.test_clear.setEnabled(not self.test_running)
+        self.caspy.test_input.setReadOnly(self.test_running)
         preset = self.caspy.selector.currentData()
         self.caspy.remove_button.setEnabled(preset in model_download.PRESETS
             and self.caspy.preset_folder(preset).exists() and self.caspy.task is None
@@ -707,6 +761,34 @@ class Window(QMainWindow):
                                          and not (matches and self.runtime.state == 'ready'))
         self.caspy.unload_button.setEnabled(self.runtime.process is not None
                                            and not self.answer_running and not self.runtime.busy and self.runtime.state != 'unloading')
+
+    def clear_model_test(self):
+        if self.test_running:
+            return
+        self.test_text = ''
+        self.caspy.test_input.clear()
+        self.caspy.test_output.clear()
+        self.caspy.test_status.setText('Single prompt · RAM only')
+
+    def test_model(self):
+        if (self.test_running or self.answer_running or self.runtime.busy or self.task is not None
+                or self.runtime.state == 'unloading'):
+            return
+        question = self.caspy.test_input.toPlainText().strip()
+        if not question:
+            return
+        configuration = self.model_configuration()
+        if configuration is None:
+            self.caspy.test_status.setText(self.inference_status.text())
+            return
+        self.test_text = ''
+        self.caspy.test_output.clear()
+        self.test_running = True
+        self.test_started = time.monotonic()
+        self.caspy.test_status.setText('Running…')
+        self.update_scope()
+        self.runtime.load(*configuration, request=dict(test_model=True, question=question,
+                          language=self.language.currentData()))
 
     def remove_preset(self):
         preset = self.caspy.selector.currentData()
@@ -827,6 +909,24 @@ class Window(QMainWindow):
 
     def inference_event(self, event):
         kind, text = event.get('kind'), event.get('text', '')
+        if self.test_running and kind != 'memory':
+            if kind == 'text':
+                self.test_text += text
+                cursor = self.caspy.test_output.textCursor()
+                cursor.movePosition(cursor.MoveOperation.End)
+                cursor.insertText(text)
+                self.caspy.test_output.setTextCursor(cursor)
+            elif kind in ('status', 'error', 'warning'):
+                self.caspy.test_status.setText(text)
+            elif kind == 'done':
+                self.test_running = False
+                self.caspy.test_output.render(self.test_text, link_citations=False)
+                status = event.get('status', 'error')
+                detail = self.caspy.test_status.text()
+                label = ('Partial · output limit' if event.get('truncated') else 'Complete') if status == 'success' else f'{status}: {detail}'
+                self.caspy.test_status.setText(f'{label} · {time.monotonic() - self.test_started:.1f} s')
+                self.update_scope()
+            return
         if kind == 'step' and self.answer_running:
             self.work_steps.update_step(event)
         elif kind == 'diagnostic' and self.answer_running:
@@ -899,9 +999,9 @@ class Window(QMainWindow):
         self.save_history_message()
         self.update_scope()
 
-    def connect_gmail(self):
-        self.start(gmail.connect)
-        self.statusBar().showMessage("Complete Google sign-in in your browser (60-second timeout)…")
+    def connect_account(self):
+        self.start(self.provider.connect)
+        self.statusBar().showMessage(f'Complete {self.provider.NAME} sign-in in your browser (60-second timeout)…')
 
     def show_account(self, email):
         if email != self.email:
@@ -913,7 +1013,7 @@ class Window(QMainWindow):
         self.email = email
         self.statusBar().showMessage(
             f"Saved account: {email} · Fetch on demand"
-            if email else "Gmail is not connected."
+            if email else f"{self.provider.NAME} is not connected."
         )
         self.refresh_messages()
 
@@ -954,8 +1054,9 @@ class Window(QMainWindow):
         self.fetch_state = 'fetching'
         self.refresh_coverage()
         account = self.email
-        exclude_promotions = self.skip_promotions.isChecked()
-        self.start(lambda: gmail.fetch(
+        exclude_promotions = self.skip_promotions.isChecked() if self.provider is gmail else False
+        provider = self.provider
+        self.start(lambda: provider.fetch(
             first, last, self.mailbox, account,
             self.task.progress.emit, self.task.isInterruptionRequested,
             exclude_promotions=exclude_promotions,
@@ -976,16 +1077,17 @@ class Window(QMainWindow):
             self.fetch_state = 'failed'
         self.refresh_messages()
         self.statusBar().showMessage(message)
-        QMessageBox.warning(self, "Gmail", message)
+        QMessageBox.warning(self, self.provider.NAME, message)
 
     def task_finished(self):
+        self.provider_picker.setEnabled(True)
         self.connect_button.setEnabled(not bool(self.email))
         self.disconnect_button.setEnabled(bool(self.email))
         self.fetch_button.setEnabled(bool(self.email))
         self.cancel_button.setEnabled(False)
         self.first.setEnabled(True)
         self.last.setEnabled(True)
-        self.skip_promotions.setEnabled(True)
+        self.skip_promotions.setEnabled(self.provider is gmail)
         self.task.deleteLater()
         self.task = None
         self.update_scope()
@@ -1008,6 +1110,7 @@ class Window(QMainWindow):
             event.ignore()
         else:
             self.runtime.shutdown()
+            self.clear_model_test()
             self.history.clear()
             self.refresh_history_controls()
             self.mailbox.clear()

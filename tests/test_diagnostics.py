@@ -43,6 +43,36 @@ class DiagnosticsTests(unittest.TestCase):
         self.assertIsNone(safe_record(event | {'code':'PRIVATE_UNKNOWN_CODE'}))
         self.assertIsNone(safe_record(event | {'code':{'PRIVATE':'VALUE'}}))
 
+    def test_rejected_text_is_not_reported_as_missing_and_has_specific_reason(self):
+        piece = self.piece() | {'passages': [{'id': 1, 'text': self.piece()['body']}]}
+        for text, code in ((None, 'fact_text_not_string'), ('   ', 'fact_text_empty'),
+                           ('PRIVATE_' * 46, 'fact_text_too_long')):
+            with self.subTest(code=code):
+                errors = []
+                raw = json.dumps(dict(key='1:1', kind='information', text=text, evidence=1))
+                self.assertEqual(checked_items(raw, [piece], on_error=errors.append), [])
+                self.assertEqual([error.code for error in errors], [code])
+                self.assertNotIn('PRIVATE_', report([dict(stage='extraction', code=code, source=1)]))
+
+    def test_invalid_single_record_retries_without_claiming_a_split(self):
+        events, calls = [], []
+        def generate(prompt, maximum):
+            calls.append(prompt)
+            yield json.dumps(dict(key='1:1', kind='information',
+                                  text=None if len(calls) == 1 else 'Payment declined.', evidence=1))
+        summarize([self.piece()], 'Summary',
+                  dict(max_input_tokens=2048, max_output_tokens=2048, max_tasks=4),
+                  lambda system, user: ((system, user), 123), generate,
+                  lambda *args: None, lambda text: None,
+                  publish=lambda kind, **value: events.append((kind, value)))
+        codes = [value['code'] for kind, value in events if kind == 'diagnostic']
+        self.assertEqual(len(calls), 2)
+        self.assertIn('retry_invalid', codes)
+        self.assertNotIn('retry_split', codes)
+        self.assertNotIn('missing_email_id', codes)
+        final = [value for kind, value in events if kind == 'summary'][-1]
+        self.assertEqual(final['cards'][0]['facts'][0]['text'], 'Payment declined.')
+
     def test_batch_retry_empty_classification_and_overview_reasons(self):
         first = self.piece()
         second = first | {'id':'PRIVATE_OTHER_ID','subject':'PRIVATE_OTHER_SUBJECT','body':'PRIVATE_OTHER_BODY: invoice is due.'}

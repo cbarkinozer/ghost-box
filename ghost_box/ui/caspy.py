@@ -5,13 +5,15 @@ from pathlib import Path
 from PySide6.QtCore import QSettings, QStandardPaths, QThread, Qt, Signal
 from PySide6.QtWidgets import (
     QComboBox, QFileDialog, QLabel, QPushButton, QVBoxLayout, QWidget,
-    QDoubleSpinBox, QSpinBox, QFormLayout, QScrollArea, QHBoxLayout,
+    QDoubleSpinBox, QSpinBox, QFormLayout, QScrollArea, QHBoxLayout, QPlainTextEdit,
+    QSizePolicy,
 )
 
 from ..models import download as model_download
 from ..models import settings as inference_settings
 from ..models.download import PRESET, GGUF_PRESET
 from ..models.projection import describe
+from .answer_view import AnswerView
 
 
 class DownloadTask(QThread):
@@ -63,6 +65,8 @@ class ModelPanel(QWidget):
         layout.addWidget(QLabel("<b>👻 Caspy</b>"))
         layout.addWidget(QLabel("Local model"))
         self.selector = QComboBox()
+        self.selector.setMinimumContentsLength(12)
+        self.selector.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
         self.selector.addItem("No model selected", "")
         self.selector.addItem("Qwen3.5 · 4B · MLX 4-bit", PRESET)
         self.selector.addItem("Qwen3.5 · 4B · GGUF Q4_K_M", GGUF_PRESET)
@@ -114,9 +118,11 @@ class ModelPanel(QWidget):
         layout.addWidget(advanced)
         self.parameter_scroll = QScrollArea()
         self.parameter_scroll.setWidgetResizable(True)
+        self.parameter_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.parameter_scroll.setMaximumHeight(340)
         form_widget = QWidget()
         form = QFormLayout(form_widget)
+        form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapAllRows)
         form.setContentsMargins(4, 4, 4, 4)
         self.controls = {}
         for key, (label, kind, lower, upper) in inference_settings.FIELDS.items():
@@ -150,6 +156,36 @@ class ModelPanel(QWidget):
         self.parameter_scroll.hide()
         advanced.toggled.connect(self.parameter_scroll.setVisible)
         layout.addWidget(self.parameter_scroll)
+        test_toggle = QPushButton('Try model ▾')
+        test_toggle.setCheckable(True)
+        test_toggle.setChecked(True)
+        layout.addWidget(test_toggle)
+        test_panel = QWidget()
+        test_layout = QVBoxLayout(test_panel)
+        test_layout.setContentsMargins(0, 0, 0, 0)
+        self.test_input = QPlainTextEdit()
+        self.test_input.setPlaceholderText('Test a prompt · no emails included')
+        self.test_input.setFixedHeight(85)
+        test_layout.addWidget(self.test_input)
+        buttons = QHBoxLayout()
+        self.test_run = QPushButton('Run')
+        self.test_stop = QPushButton('Stop')
+        self.test_stop.setEnabled(False)
+        self.test_clear = QPushButton('Clear')
+        for button in (self.test_run, self.test_stop, self.test_clear):
+            button.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+            buttons.addWidget(button)
+        test_layout.addLayout(buttons)
+        self.test_status = QLabel('Single prompt · RAM only')
+        self.test_status.setTextFormat(Qt.TextFormat.PlainText)
+        self.test_status.setWordWrap(True)
+        test_layout.addWidget(self.test_status)
+        self.test_output = AnswerView()
+        self.test_output.setPlaceholderText('Model response')
+        self.test_output.setMinimumHeight(160)
+        test_layout.addWidget(self.test_output)
+        test_toggle.toggled.connect(test_panel.setVisible)
+        layout.addWidget(test_panel)
         layout.addStretch()
 
         selected = self.settings.value("model/selection", "", type=str)

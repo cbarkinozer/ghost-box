@@ -70,7 +70,7 @@ def workflow(request, backend, params):
                 yield text
             if request.get('summarize') and backend.finish_reason == 'length':
                 emit('diagnostic', code='output_limit', stage='generation', call=requests)
-            if phase.endswith('Answering') and backend.finish_reason == 'length':
+            if (phase.endswith('Answering') or request.get('test_model')) and backend.finish_reason == 'length':
                 truncated = True
                 emit('warning', 'Output token limit reached; this answer is partial. Increase Output tokens and retry.')
         finally:
@@ -119,10 +119,16 @@ def workflow(request, backend, params):
             question += '\nSearch supplied only the top matching excerpts, not full emails. If evidence is insufficient, say so.'
             search_tasks = 1
             params = params | {'max_tasks': params['max_tasks'] - 1}
-        if not request.get('use_search') and not request.get('follow_up') and not request.get('draft'):
+        if not request.get('test_model') and not request.get('use_search') and not request.get('follow_up') and not request.get('draft'):
             emit('search', 'BM25 kullanılmadı · Seçili mailler doğrudan inceleniyor.'
                  if request.get('language') == 'Turkish' else 'BM25 not used · Selected emails are inspected directly.')
-        if request.get('follow_up'):
+        if request.get('test_model'):
+            prompt, count = backend.render(with_language('You are Caspy, a helpful local assistant. Answer the user directly.', request.get('language', 'English')), question)
+            if count > params['max_input_tokens']:
+                raise TaskError('Test prompt exceeds Input tokens. Shorten it or increase the limit.')
+            for text in generate(prompt, params['max_output_tokens']):
+                emit('text', text)
+        elif request.get('follow_up'):
             follow_up(request, params, backend.render, generate, progress,
                       lambda text: emit('text', text), emit, steps=steps)
         elif request.get('draft'):

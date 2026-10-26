@@ -1,6 +1,5 @@
 """Human-reviewed reply/forward dialog. Drafts and approved payloads stay in RAM."""
 
-import json
 import time
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QTextCursor
@@ -9,8 +8,8 @@ from PySide6.QtWidgets import (
     QMessageBox, QPlainTextEdit, QPushButton, QVBoxLayout,
 )
 
-from ..mail import gmail
-from ..mail.drafting import prepare, draft_prompt, build_payload
+from ..mail.errors import AccountError
+from ..mail.drafting import prepare, draft_prompt
 from .tasks import AccountTask
 
 
@@ -18,6 +17,7 @@ class ComposeDialog(QDialog):
     def __init__(self, source, account, mode, owner):
         super().__init__(owner)
         self.owner, self.source, self.account, self.mode = owner, source.copy(), account, mode
+        self.provider = owner.provider
         self.task = None
         self.generating = False
         self.allowed = False
@@ -41,7 +41,7 @@ class ComposeDialog(QDialog):
         form.addRow('To', self.to); form.addRow('CC', self.cc); form.addRow('Subject', self.subject)
         layout.addLayout(form)
         self.instructions = QPlainTextEdit()
-        self.instructions.setPlaceholderText('What should the reply say? Or how should the existing draft be rewritten?')
+        self.instructions.setPlaceholderText('Rough notes are enough, e.g. “thank them, say we need until Friday”. The original email is included for context.')
         self.instructions.setMaximumHeight(80)
         layout.addWidget(self.instructions)
         actions = QHBoxLayout()
@@ -51,7 +51,7 @@ class ComposeDialog(QDialog):
         self.undo_button = QPushButton('Undo Caspy rewrite')
         self.undo_button.clicked.connect(self.undo_rewrite)
         actions.addWidget(self.undo_button)
-        self.permission_button = QPushButton('Enable Gmail sending')
+        self.permission_button = QPushButton('Enable ' + self.provider.NAME + ' sending')
         self.permission_button.clicked.connect(self.enable_sending)
         actions.addWidget(self.permission_button)
         layout.addLayout(actions)
@@ -76,7 +76,7 @@ class ComposeDialog(QDialog):
         layout.addLayout(footer)
         owner.runtime.event.connect(self.model_event)
         owner.runtime.state_changed.connect(self.update_buttons)
-        self.start_task(lambda: gmail.can_send(account), self.permission_checked)
+        self.start_task(lambda: self.provider.can_send(account), self.permission_checked)
 
     def update_buttons(self, *_):
         busy = self.task is not None or self.generating
@@ -100,7 +100,7 @@ class ComposeDialog(QDialog):
     def task_error(self, text):
         if self.sending:
             self.locked = True
-            text = 'Send result is unconfirmed. Check Gmail Sent before sending again.'
+            text = 'Send result is unconfirmed. Check the provider Sent folder before sending again.'
         self.status.setText(text)
 
     def task_finished(self):
@@ -110,13 +110,13 @@ class ComposeDialog(QDialog):
 
     def permission_checked(self, allowed):
         self.allowed = allowed
-        self.permission_button.setText('Reauthorize sending' if allowed else 'Enable Gmail sending')
+        self.permission_button.setText('Reauthorize sending' if allowed else 'Enable ' + self.provider.NAME + ' sending')
         self.status.setText('Sending enabled; review recipients and body before Send.' if allowed else
-                            'Draft locally or enable Gmail sending to send from this dialog.')
+                            'Draft locally or enable sending to send from this dialog.')
 
     def enable_sending(self):
         self.status.setText('Grant sending access in your browser using the same Gmail account…')
-        self.start_task(lambda: gmail.connect(allow_send=True, expected_account=self.account),
+        self.start_task(lambda: self.provider.connect(allow_send=True, expected_account=self.account),
                         lambda _: self.permission_checked(True))
 
     def generate(self):
@@ -132,8 +132,7 @@ class ComposeDialog(QDialog):
         current = self.previous_body
         if self.mode == 'forward' and self.forwarded and current.endswith(self.forwarded):
             current = current[:-len(self.forwarded)]
-        question = draft_prompt(self.source, instruction, self.owner.language.currentData(), self.mode)
-        question += '\nCurrent editable draft (context):\n' + json.dumps(current, ensure_ascii=False)
+        question = draft_prompt(self.source, instruction, self.owner.language.currentData(), self.mode, current)
         self.generating = True; self.warning = ''
         self.draft_started = time.monotonic()
         self.body.clear(); self.update_buttons()
@@ -174,7 +173,7 @@ class ComposeDialog(QDialog):
             return
         draft = dict(to=self.to.text(), cc=self.cc.text(), subject=self.subject.text(), body=self.body.toPlainText())
         try:
-            payload = build_payload(self.account, self.source, self.mode, draft)
+            payload = self.provider.build_payload(self.account, self.source, self.mode, draft)
         except ValueError as error:
             self.status.setText(str(error)); return
         approval = QMessageBox(self)
@@ -192,15 +191,15 @@ class ComposeDialog(QDialog):
         self.sending = True
         def send():
             try:
-                return {'id': gmail.send(self.account, payload)}
-            except gmail.AccountError as error:
+                return {'id': self.provider.send(self.account, payload)}
+            except AccountError as error:
                 return {'error': str(error), 'uncertain': getattr(error, 'uncertain', False)}
         self.start_task(send, self.sent)
 
     def sent(self, result):
         if 'id' in result:
             self.locked = True
-            self.status.setText('Sent successfully. No automatic follow-up or additional send will occur.')
+            self.status.setText(f'{self.provider.NAME} accepted the message. Check Sent for delivery status; no automatic retry will occur.')
         else:
             self.locked = result.get('uncertain', False)
             self.status.setText(result['error'])

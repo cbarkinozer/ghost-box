@@ -126,8 +126,12 @@ def checked_items(raw, pieces, on_error=None):
         for fact in facts:
             if not isinstance(fact, dict) or set(fact) != {'text', 'quote'}:
                 invalid = 'invalid_facts'; break
-            if not isinstance(fact['text'], str) or not 1 <= len(fact['text']) <= 360:
-                invalid = 'invalid_fact_text'; break
+            if not isinstance(fact['text'], str):
+                invalid = 'fact_text_not_string'; break
+            if not fact['text'].strip():
+                invalid = 'fact_text_empty'; break
+            if len(fact['text']) > 360:
+                invalid = 'fact_text_too_long'; break
             if not supported(fact['quote']):
                 invalid = 'quote_mismatch'; break
         if invalid:
@@ -138,7 +142,7 @@ def checked_items(raw, pieces, on_error=None):
         records[key] = {'key': key, 'id': piece['id'], 'source': source, 'kind': kind,
                         'kind_reason': reason, 'facts': facts}
     for key, piece in expected.items():
-        if key not in records:
+        if key not in seen:
             reject('missing_email_id', piece['source'])
     return list(records.values())
 
@@ -292,7 +296,8 @@ def summarize(messages, question, params, render, generate, progress, stream,
                 queue[0:0] = [(part, False, steps.add('summary_retry', [item['source'] for item in part], before=before))
                               for part in groups]
                 total += len(groups)
-                diagnose('retry_split' if issues else 'retry_empty', [item['source'] for item in retry])
+                diagnose(('retry_split' if len(groups) > 1 else 'retry_invalid') if issues else 'retry_empty',
+                         [item['source'] for item in retry])
             else:
                 diagnose('retry_budget_exhausted', [item['source'] for item in retry])
         if retry and (not retry_empty or not groups or completed + len(queue) > cap):
