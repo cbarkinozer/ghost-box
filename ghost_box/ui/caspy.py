@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (
 
 from ..models import download as model_download
 from ..models import settings as inference_settings
-from ..models.download import PRESET, GGUF_PRESET
+from ..models.download import PRESET, GGUF_PRESET, OCCAM_PRESET
 from ..models.projection import describe
 from .answer_view import AnswerView
 
@@ -68,6 +68,7 @@ class ModelPanel(QWidget):
         self.selector.setMinimumContentsLength(12)
         self.selector.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
         self.selector.addItem("No model selected", "")
+        self.selector.addItem("Occam-Turkish · 4B · GGUF Q4_K_M", OCCAM_PRESET)
         self.selector.addItem("Qwen3.5 · 4B · MLX 4-bit", PRESET)
         self.selector.addItem("Qwen3.5 · 4B · GGUF Q4_K_M", GGUF_PRESET)
         layout.addWidget(self.selector)
@@ -209,10 +210,11 @@ class ModelPanel(QWidget):
 
     def select_local(self, path):
         # Keep just one custom folder in the small selector.
-        if self.selector.count() > 3:
-            self.selector.removeItem(3)
+        for index in range(self.selector.count() - 1, 0, -1):
+            if self.selector.itemData(index) not in model_download.PRESETS:
+                self.selector.removeItem(index)
         self.selector.addItem("Local: " + Path(path).name, path)
-        self.selector.setCurrentIndex(3)
+        self.selector.setCurrentIndex(self.selector.count() - 1)
 
     def save_selection(self):
         self.settings.setValue("model/selection", self.selector.currentData())
@@ -285,7 +287,12 @@ class ModelPanel(QWidget):
         self.parameters_changed.emit()
 
     def preset_folder(self, selected):
-        return self.model_folder if selected == PRESET else self.gguf_folder
+        if selected == PRESET:
+            return self.model_folder
+        if selected == GGUF_PRESET:
+            return self.gguf_folder
+        manifest = model_download.PRESETS.get(selected)
+        return self.model_folder.parent / manifest['revision'] if manifest else self.model_folder
 
     def update_status(self):
         selected = self.selector.currentData()

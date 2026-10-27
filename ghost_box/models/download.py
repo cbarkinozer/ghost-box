@@ -12,7 +12,9 @@ PRESET = MANIFEST["repo"]
 REVISION = MANIFEST["revision"]
 GGUF_MANIFEST = json.loads((Path(__file__).parent / "data" / "gguf_manifest.json").read_text())
 GGUF_PRESET = GGUF_MANIFEST["repo"]
-PRESETS = {PRESET: MANIFEST, GGUF_PRESET: GGUF_MANIFEST}
+OCCAM_MANIFEST = json.loads((Path(__file__).parent / "data" / "occam_manifest.json").read_text())
+OCCAM_PRESET = OCCAM_MANIFEST["repo"]
+PRESETS = {PRESET: MANIFEST, GGUF_PRESET: GGUF_MANIFEST, OCCAM_PRESET: OCCAM_MANIFEST}
 TOTAL_BYTES = sum(item["size"] for item in MANIFEST["files"])
 
 

@@ -13,6 +13,7 @@ from PySide6.QtWidgets import QApplication
 
 from ghost_box.ui.window import Window, prepare_qt_plugins
 from ghost_box.mail.context import SYSTEM, build_context
+from ghost_box.models.download import PRESET
 
 
 class SelectionTests(unittest.TestCase):
@@ -76,7 +77,7 @@ class SelectionTests(unittest.TestCase):
                 self.assertIn('Default response language: English', window.question_text())
                 self.assertEqual(window.answer.toPlainText(), rendered)
                 with patch('ghost_box.models.download.ready', return_value=True):
-                    window.caspy.selector.setCurrentIndex(1)
+                    window.caspy.selector.setCurrentIndex(window.caspy.selector.findData(PRESET))
                     self.assertEqual(window.caspy.download_button.text(), 'Preset downloaded')
                     self.assertFalse(window.caspy.download_button.isEnabled())
                     window.mail_list.selectAll()
@@ -127,7 +128,7 @@ class SelectionTests(unittest.TestCase):
                 self.assertEqual(window.caspy.selected_folder(), gguf)
                 window.caspy.controls['temperature'].setValue(0.25)
                 window.caspy.save_parameters()
-                window.caspy.selector.setCurrentIndex(1)
+                window.caspy.selector.setCurrentIndex(window.caspy.selector.findData(PRESET))
                 self.assertEqual(window.caspy.parameters()['temperature'], 0.7)
                 window.caspy.selector.setCurrentIndex(window.caspy.selector.findData(str(gguf)))
                 self.assertEqual(window.caspy.parameters()['temperature'], 0.25)

@@ -73,7 +73,7 @@ Python is the initial implementation choice. Introduce another application langu
 
 The user selects the backend explicitly. A file format alone does not establish model compatibility. Complete one backend first, then add the second behind the same narrow inference interface.
 
-The initial model preset is [mlx-community/Qwen3.5-4B-MLX-4bit](https://huggingface.co/mlx-community/Qwen3.5-4B-MLX-4bit). Text-only generation was verified with the pinned `mlx-lm==0.32.2` runtime and this preset revision. [Occam](https://huggingface.co/cbarkinozer/Qwen3.5-4B-Turkish-Concise-Lora), a Turkish concise-response LoRA, is an additional candidate after conversion and task-specific evaluation. Caspy is the companion's name; the underlying model can change.
+The initial model preset is [mlx-community/Qwen3.5-4B-MLX-4bit](https://huggingface.co/mlx-community/Qwen3.5-4B-MLX-4bit). Text-only generation was verified with the pinned `mlx-lm==0.32.2` runtime and this preset revision. [Occam-Turkish](https://huggingface.co/cbarkinozer/Qwen3.5-4B-Turkish-Concise-Lora) is also built into the Caspy model list as a merged Q4_K_M GGUF (~2.7 GB), with a pinned revision and SHA-256-verified download. It targets concise Turkish responses; email-workflow accuracy evaluation remains pending. Its starting settings use temperature 0 and repetition penalty 1.05. Select it and click **Download preset**; model weights are not bundled or downloaded automatically. Caspy is the companion's name; the underlying model can change.
 
 Choose the default using email summarization and question-answering results, including factual faithfulness, retrieval quality, latency, and memory usage. Concise output alone is insufficient.
 
@@ -235,14 +235,14 @@ uv run --locked python -m unittest discover -s tests -v
 
 ### Model downloads
 
-**Download preset** retrieves only the selected public preset from Hugging Face. No mail is included in model-download requests. Both presets use the same small downloader and verify every file before promotion from `.part`; completion is recorded only after all files succeed. Startup checks the completion record and sizes, while retrying rechecks hashes.
+**Download preset** retrieves only the selected public preset from Hugging Face. No mail is included in model-download requests. All presets use the same small downloader and verify every file before promotion from `.part`; completion is recorded only after all files succeed. Startup checks the completion record and sizes, while retrying rechecks hashes.
 
 | Preset | Download | Pinned revision | Manifest |
 | --- | --- | --- | --- |
 | MLX 4-bit | approximately 3.1 GB | `32f3e8ecf65426fc3306969496342d504bfa13f3` | `ghost_box/models/data/model_manifest.json` |
 | GGUF Q4_K_M | 3,013,027,808 bytes | `4168f45a16a1290d65a4ec0fa312ae917a4c15d6` | `ghost_box/models/data/gguf_manifest.json` |
 
-The GGUF artifact is [Qwen_Qwen3.5-4B-Q4_K_M.gguf](https://huggingface.co/bartowski/Qwen_Qwen3.5-4B-GGUF/blob/4168f45a16a1290d65a4ec0fa312ae917a4c15d6/Qwen_Qwen3.5-4B-Q4_K_M.gguf), with SHA-256 `13c16f426047e2de38cd075bdade4a7bcbc8c774384876f677740cda65f8a983`. Only the text model is downloaded; no vision projector is required for email. Both presets start with a 2,048-token output budget and support per-model numeric overrides. Existing settings files pick up the built-in GGUF defaults when no custom profile exists; saved user values are preserved.
+The GGUF artifact is [Qwen_Qwen3.5-4B-Q4_K_M.gguf](https://huggingface.co/bartowski/Qwen_Qwen3.5-4B-GGUF/blob/4168f45a16a1290d65a4ec0fa312ae917a4c15d6/Qwen_Qwen3.5-4B-Q4_K_M.gguf), with SHA-256 `13c16f426047e2de38cd075bdade4a7bcbc8c774384876f677740cda65f8a983`. Only the text model is downloaded; no vision projector is required for email. All presets start with a 2,048-token output budget and support per-model numeric overrides. Existing settings files pick up the built-in GGUF defaults when no custom profile exists; saved user values are preserved.
 
 Models live under Qt's application-data directory at `models/<revision>/` (`~/Library/Application Support/Ghost-box/models/` on macOS). This is separate from session-only emails. There is no duplicate Hub cache. Cancel removes the current partial file; verified completed files are reused on retry. Transfers interrupted within one file restart that file. Closing during a download requests cancellation; close again after it stops. Network reads have 20-second timeouts.
 

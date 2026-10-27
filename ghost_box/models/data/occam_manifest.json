@@ -1,0 +1,12 @@
+{
+  "repo": "cbarkinozer/Qwen3.5-4B-Turkish-Concise-Lora",
+  "revision": "5000fe9fa73e3df7709b2d531a143c919291f342",
+  "files": [
+    {
+      "name": "Qwen3.5-4B-Turkish-Concise-Q4_K_M.gguf",
+      "size": 2708804224,
+      "algorithm": "sha256",
+      "digest": "e640ec52d141138a1ee568421c821a9308eb5cdbb94112f3d3f2f77418069857"
+    }
+  ]
+}

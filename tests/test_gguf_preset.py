@@ -23,31 +23,51 @@ class GGUFPresetTests(unittest.TestCase):
         prepare_qt_plugins();cls.app=QApplication.instance() or QApplication([])
 
     def test_preset_resolves_verified_gguf_file_and_restores_selection(self):
+        for preset in (download.GGUF_PRESET, download.OCCAM_PRESET):
+            with self.subTest(preset=preset), tempfile.TemporaryDirectory() as directory:
+                settings=QSettings(str(Path(directory)/'settings.ini'),QSettings.Format.IniFormat)
+                payload=b'GGUF synthetic model'
+                manifest=download.PRESETS[preset] | {'files':[dict(name='Qwen_Qwen3.5-4B-Q4_K_M.gguf',
+                           size=len(payload),algorithm='sha256',digest=hashlib.sha256(payload).hexdigest())]}
+                with (patch('ghost_box.ui.caspy.QSettings',return_value=settings),
+                      patch('ghost_box.ui.caspy.QStandardPaths.writableLocation',return_value=directory),
+                      patch.dict(download.PRESETS,{preset:manifest})):
+                    panel=ModelPanel()
+                    panel.selector.setCurrentIndex(panel.selector.findData(preset))
+                    self.assertIsNone(panel.selected_folder())
+                    self.assertTrue(panel.download_button.isEnabled())
+                    folder = panel.preset_folder(preset)
+                    folder.mkdir(parents=True)
+                    file=folder/manifest['files'][0]['name'];file.write_bytes(payload)
+                    (folder/'download-complete.json').write_text(json.dumps(manifest))
+                    panel.update_status()
+                    self.assertEqual(panel.selected_folder(),file)
+                    self.assertFalse(panel.download_button.isEnabled())
+                    self.assertEqual(panel.parameters()['max_output_tokens'],2048)
+                    panel.controls['temperature'].setValue(0.25);panel.save_parameters()
+                    restored=ModelPanel()
+                    self.assertEqual(restored.selector.currentData(),preset)
+                    self.assertEqual(restored.selected_folder(),file)
+                    self.assertEqual(restored.parameters()['temperature'],0.25)
+                    panel.deleteLater();restored.deleteLater()
+
+    def test_custom_selection_preserves_all_builtins(self):
         with tempfile.TemporaryDirectory() as directory:
-            settings=QSettings(str(Path(directory)/'settings.ini'),QSettings.Format.IniFormat)
-            payload=b'GGUF synthetic model'
-            manifest=download.GGUF_MANIFEST | {'files':[dict(name='Qwen_Qwen3.5-4B-Q4_K_M.gguf',
-                       size=len(payload),algorithm='sha256',digest=hashlib.sha256(payload).hexdigest())]}
-            with (patch('ghost_box.ui.caspy.QSettings',return_value=settings),
-                  patch('ghost_box.ui.caspy.QStandardPaths.writableLocation',return_value=directory),
-                  patch.dict(download.PRESETS,{download.GGUF_PRESET:manifest})):
-                panel=ModelPanel()
-                panel.selector.setCurrentIndex(panel.selector.findData(download.GGUF_PRESET))
-                self.assertIsNone(panel.selected_folder())
-                self.assertTrue(panel.download_button.isEnabled())
-                panel.gguf_folder.mkdir(parents=True)
-                file=panel.gguf_folder/manifest['files'][0]['name'];file.write_bytes(payload)
-                (panel.gguf_folder/'download-complete.json').write_text(json.dumps(manifest))
-                panel.update_status()
-                self.assertEqual(panel.selected_folder(),file)
-                self.assertFalse(panel.download_button.isEnabled())
-                self.assertEqual(panel.parameters()['max_output_tokens'],2048)
-                panel.controls['temperature'].setValue(0.25);panel.save_parameters()
-                restored=ModelPanel()
-                self.assertEqual(restored.selector.currentData(),download.GGUF_PRESET)
-                self.assertEqual(restored.selected_folder(),file)
-                self.assertEqual(restored.parameters()['temperature'],0.25)
-                panel.deleteLater();restored.deleteLater()
+            settings = QSettings(str(Path(directory) / 'settings.ini'), QSettings.Format.IniFormat)
+            with (patch('ghost_box.ui.caspy.QSettings', return_value=settings),
+                  patch('ghost_box.ui.caspy.QStandardPaths.writableLocation', return_value=directory)):
+                panel = ModelPanel()
+                for name in ('first.gguf', 'second.gguf'):
+                    panel.select_local(str(Path(directory) / name))
+                    self.assertEqual(panel.selector.currentData(), str(Path(directory) / name))
+                    self.assertEqual(panel.selector.count(), len(download.PRESETS) + 2)
+                    for preset in download.PRESETS:
+                        self.assertGreater(panel.selector.findData(preset), 0)
+                self.assertNotEqual(panel.preset_folder(download.OCCAM_PRESET), panel.gguf_folder)
+                values = profiles.defaults(download.OCCAM_PRESET)
+                self.assertEqual(values['temperature'], 0)
+                self.assertEqual(values['repetition_penalty'], 1.05)
+                panel.deleteLater()
 
     def test_windows_default_dependency_uses_locked_upstream_cpu_wheel(self):
         root=Path(__file__).resolve().parents[1]

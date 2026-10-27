@@ -2,15 +2,14 @@
 
 Build a small desktop application in reviewable steps. Checked items are implemented or backed by the specific validation stated; unchecked items remain pending. Implementation checks do not replace the model-quality benchmark or device-specific release validation. Mixed implementation/release tasks are split below.
 
-## Agreed phases — updated 2026-10-26
+## Agreed phases — updated 2026-10-27
 
 This phase plan is the authoritative scope/order for the detailed checklist below. Unchecked later-phase items do not block phase 1 completion.
 
 ### Phase 1 — finish native Windows testing
 
 - [x] Live Gmail sending works (user-confirmed).
-- [x] Outlook setup and live testing complete (user-confirmed); this records the user's confirmation, not independent validation of every tenant or error path.
-- [ ] Test the current application on a real Windows machine: startup/shutdown, Gmail/Outlook connect and fetch, reviewed sending, credential storage, GGUF preset download/load/generation/Stop/unload, and usable Caspy layout without horizontal scrolling.
+- [ ] Test the current application on a real Windows machine: startup/shutdown, Gmail connect and fetch, reviewed Gmail sending, credential storage, GGUF preset download/load/generation/Stop/unload, and usable Caspy layout without horizontal scrolling.
 
 Windows-machine testing is the only remaining phase 1 gate. After it passes, phase 1 is complete.
 
@@ -22,6 +21,8 @@ Windows-machine testing is the only remaining phase 1 gate. After it passes, pha
 Packaging and beta distribution follow phase 1; they are not additional phase 1 gates.
 
 ### Phase 2 — email features, benchmarks, reliability and privacy
+
+- [ ] Complete Outlook app registration/configuration and live connect, fetch, send, reconnect and disconnect testing, including Windows. Deferred by the user; Outlook is not a phase 1 gate.
 
 - [ ] Remaining email features: chronological thread summaries, natural-language search with inspectable filters, optional local inbox date filtering, attachment forwarding and voice input.
 - [ ] Model-quality evaluation and repeatable benchmarks: accuracy, omissions, citations, conflicts, adversarial cases, latency, throughput and memory baselines.
@@ -243,8 +244,8 @@ Start with 24 synthetic messages across a few threads and 20 cases (see benchmar
 - [ ] Validate the selected GGUF preset on real Windows hardware; macOS cross-platform resolution is not native Windows validation.
 - [x] Add Outlook/Microsoft 365 provider selection, browser OAuth via MSAL, native encrypted token-cache storage, and manual Graph fetching with pagination, UTC date bounds, excluded folder descendants, RAM-only normalization and coverage.
 - [x] Route compose permission checks, reviewed MIME sending and disconnect to the selected provider; keep Gmail/Outlook credentials separate and clear RAM on provider switches.
-- [x] Outlook setup and live operation confirmed by the user. Broader Outlook.com/company tenant, MFA/consent, refresh and disconnect coverage is not separately documented.
-- [x] Live Outlook testing confirmed by the user. Individual reply/reply-all/forward recipient/threading cases are not separately documented; mocked POST tests remain separate from live testing.
+- [ ] Complete Outlook setup and verify live operation in phase 2. App registration is not complete; broader tenant, consent, refresh and disconnect checks remain pending.
+- [ ] Verify live Outlook sending, reply/reply-all/forward recipients and threading in phase 2; mocked POST tests do not establish live delivery.
 - [ ] Package native applications and verify startup, idle memory, downloads, credentials, and worker shutdown on supported devices.
 - [ ] Review local data protection, retention, backups, dependencies, and network boundaries before broader confidential use.
 
@@ -270,4 +271,4 @@ No Docker distribution, separate application SSO, automatic fetching, automatic 
 - [x] Local Turkish reply drafting without a send grant or delivery.
 - [x] Mocked send tests: canceled approval makes no call, approved payload stays frozen, success prevents duplicate submission, ambiguous failure is not retried.
 - [x] Synthetic Outlook checks cover chunked native cache storage, wrong-account/denied-consent protection, refresh failure, folder exclusions, pagination, date bounds, cancellation, MIME submission and provider isolation; no real Microsoft account or mail was accessed.
-- [ ] Native Windows testing remains the final phase 1 gate. Gmail sending and Outlook live testing are user-confirmed; broader summary accuracy, adversarial mail and privacy/reliability reviews belong to phase 2.
+- [ ] Native Windows testing remains the final phase 1 gate. Gmail sending is user-confirmed. Outlook setup/live testing is deferred to phase 2, alongside broader summary accuracy, adversarial mail and privacy/reliability reviews.
